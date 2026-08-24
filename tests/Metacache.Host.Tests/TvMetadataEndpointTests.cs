@@ -30,6 +30,11 @@ public class TvMetadataEndpointTests : ProviderEndpointTestBase
         Assert.Contains(item.GuidItems!, g => g.Id == "imdb://tt1305826");
         Assert.Contains(item.GuidItems!, g => g.Id == "tvdb://152831");
         Assert.Contains(item.Genre!, g => g.Tag == "Animation");
+
+        RatingItem rating = Assert.Single(item.Rating!);
+        Assert.Equal("themoviedb://image.rating", rating.Image);
+        Assert.Equal("audience", rating.Type);
+        Assert.Equal(8.5, rating.Value);
         Assert.Contains(item.Network!, n => n.Tag == "Cartoon Network");
         Assert.Contains(item.StudioItems!, s => s.Tag == "Cartoon Network Studios");
         Assert.Contains(item.Role!, r => r.Tag == "Jeremy Shada");
@@ -90,6 +95,7 @@ public class TvMetadataEndpointTests : ProviderEndpointTestBase
         Assert.Equal("show", item.ParentType);
         Assert.Equal("tmdb-show-15260", item.ParentRatingKey);
         Assert.Equal("TV-PG", item.ContentRating);
+        Assert.Equal(8.5, Assert.Single(item.Rating!).Value); // inherits the show's TMDB rating
         Assert.Equal(3, Upstream.Requests.Count); // show + season + content ratings
     }
 

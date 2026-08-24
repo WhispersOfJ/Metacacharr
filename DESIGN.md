@@ -673,3 +673,12 @@ bugs; distinct fixtures now exist per item.
 **Deferred:** collections, alternate episode orders, `Network[]`, `SeasonType[]`, and
 `includeFields`/`excludeElements` response customization. Wire models for all of
 these already exist in `MetadataModels.cs`.
+
+**Live check against real TMDB (Read Access Token) found one gap:** shows and seasons
+emitted no `Rating[]` even though episodes did (and movies always had). The mapper
+now emits the TMDB audience rating on show/season items too (seasons inherit the
+show's vote). Everything else verified live: structure-gated episode matching by
+index and by air date, `/children` + `/grandchildren` paging (default 20, header
+overrides), complete `Guid[]` (tmdb+imdb+tvdb) and cast/crew with rewritten `/img`
+thumbs, country-aware content rating, real poster fetch through `/img`, and repeat
+matches adding zero upstream calls.

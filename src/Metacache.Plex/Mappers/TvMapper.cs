@@ -59,6 +59,9 @@ public static class TvMapper
             Summary: show.Overview,
             Duration: show.EpisodeRunTime?.FirstOrDefault() is { } minutes ? minutes * 60_000 : null,
             ContentRating: PeopleMapper.TvContentRating(ratings, country),
+            Rating: show.VoteAverage > 0
+                ? [new RatingItem("themoviedb://image.rating", "audience", show.VoteAverage)]
+                : null,
             Genre: show.Genres is null ? null : show.Genres.Select(g => new GenreItem(g.Name ?? "")).ToList(),
             GuidItems: BuildShowGuids(show, externalIds),
             Role: PeopleMapper.ToRoles(credits, imageBaseUrl),
@@ -122,6 +125,9 @@ public static class TvMapper
             Year: YearOf(season.AirDate) ?? YearOf(show.FirstAirDate),
             Summary: season.Overview,
             ContentRating: PeopleMapper.TvContentRating(ratings, country),
+            Rating: show.VoteAverage > 0
+                ? [new RatingItem("themoviedb://image.rating", "audience", show.VoteAverage)]
+                : null,
             Index: season.SeasonNumber,
             ParentRatingKey: showKey,
             ParentKey: $"/library/metadata/{showKey}",
