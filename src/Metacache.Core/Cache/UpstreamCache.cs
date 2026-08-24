@@ -78,33 +78,65 @@ public sealed class UpstreamCache
             return cached.ToResponse(CacheSource.Cache);
         }
 
-        if (cached is not null)
+        try
         {
-            // Stale → revalidate with a conditional request.
-            try
-            {
-                var request = new UpstreamRequest(new Uri(url), cached.ETag, cached.LastModified, headers);
-                UpstreamResponse upstream = await TimedSendAsync(request, url).ConfigureAwait(false);
-                return HandleUpstreamResponse(upstream, key, url, cached, policy, now);
-            }
-            catch (HttpRequestException ex)
+            UpstreamResponse upstream = await SendWithRetryAsync(url, cached, policy, headers).ConfigureAwait(false);
+            return HandleUpstreamResponse(upstream, key, url, cached, policy, now);
+        }
+        catch (HttpRequestException ex)
+        {
+            if (cached is not null)
             {
                 _logger.LogWarning(ex, "Upstream transport failure revalidating {Url}; serving stale", url);
                 return ServeStaleOrThrow(cached, policy, now,
                     new UpstreamException(0, null, $"Transport failure for {url}: {ex.Message}"));
             }
-        }
-
-        // Cold miss.
-        try
-        {
-            UpstreamResponse upstream = await TimedSendAsync(new UpstreamRequest(new Uri(url), Headers: headers), url).ConfigureAwait(false);
-            return HandleUpstreamResponse(upstream, key, url, cached: null, policy, now);
-        }
-        catch (HttpRequestException ex)
-        {
             throw new UpstreamException(0, null, $"Transport failure for {url}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Sends the request (conditional when a stale entry exists), retrying 429 (Too Many
+    /// Requests) up to <see cref="CachePolicy.MaxRetries"/> times so a rate-limited
+    /// refresh waits out the window instead of failing or serving stale. The wait honors
+    /// Retry-After when present, otherwise exponential backoff (base × 2^attempt); both
+    /// are capped by <see cref="CachePolicy.EffectiveMaxRetryDelay"/>. Every 429 response
+    /// is counted for the /metrics/prometheus rate-limited counter.
+    /// </summary>
+    private async Task<UpstreamResponse> SendWithRetryAsync(
+        string url, CachedUpstreamRow? cached, CachePolicy policy, IReadOnlyDictionary<string, string>? headers)
+    {
+        var request = cached is not null
+            ? new UpstreamRequest(new Uri(url), cached.ETag, cached.LastModified, headers)
+            : new UpstreamRequest(new Uri(url), Headers: headers);
+
+        for (int attempt = 0; ; attempt++)
+        {
+            UpstreamResponse response = await TimedSendAsync(request, url).ConfigureAwait(false);
+            if (response.StatusCode != 429 || attempt >= policy.MaxRetries)
+                return response;
+
+            // Count each rate-limited response (the final, non-retried 429 is counted
+            // in HandleUpstreamResponse — exactly one observation per response).
+            _metrics.ObserveRateLimited(ProviderFor(url));
+            TimeSpan wait = RetryDelay(response.RetryAfter, attempt, policy);
+            _logger.LogWarning(
+                "Upstream rate-limited for {Url}; retrying in {Wait:F1}s (attempt {Attempt}/{MaxRetries})",
+                url, wait.TotalSeconds, attempt + 1, policy.MaxRetries);
+            await Task.Delay(wait, CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Retry wait: Retry-After when given (past → immediate), else backoff base × 2^attempt, capped.</summary>
+    private TimeSpan RetryDelay(DateTimeOffset? retryAfter, int attempt, CachePolicy policy)
+    {
+        TimeSpan wait = retryAfter is { } when
+            ? when - _clock.UtcNow
+            : TimeSpan.FromSeconds(policy.RetryBaseSeconds * Math.Pow(2, attempt));
+        if (wait < TimeSpan.Zero)
+            wait = TimeSpan.Zero;
+        TimeSpan cap = policy.EffectiveMaxRetryDelay;
+        return wait > cap ? cap : wait;
     }
 
     /// <summary>

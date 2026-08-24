@@ -159,10 +159,26 @@ public class MetricsEndpointTests : ProviderEndpointTestBase
     [Fact]
     public async Task Prometheus_metrics_count_rate_limited_responses()
     {
-        Upstream.Handler = _ => new UpstreamResponse(429, TestBytes.Of("rate limited"), "text/plain", null, null, null);
+        // Each upstream path is 429'd once (short Retry-After), then recovers — the
+        // gateway retries each rate-limited call and the counter renders per provider.
+        var rateLimitedPaths = new HashSet<string>(StringComparer.Ordinal);
+        Upstream.Handler = request =>
+        {
+            string path = request.Url.AbsolutePath;
+            lock (rateLimitedPaths)
+            {
+                if (rateLimitedPaths.Add(path))
+                    return new UpstreamResponse(429, TestBytes.Of("rate limited"), "text/plain", null, null,
+                        DateTimeOffset.UtcNow.AddMilliseconds(20));
+            }
+            string body = path.EndsWith("/movie/105/credits", StringComparison.Ordinal) ? TmdbTestData.MovieCreditsJson
+                : path.EndsWith("/movie/105/release_dates", StringComparison.Ordinal) ? TmdbTestData.ReleaseDatesJson
+                : TmdbTestData.Movie105Json;
+            return new UpstreamResponse(200, TestBytes.Of(body), "application/json", null, null, null);
+        };
 
-        // The metadata call fails with 429; the counter still registers per provider.
-        await Client.GetAsync("/library/metadata/tmdb-movie-105");
+        var metadata = await Client.GetAsync("/library/metadata/tmdb-movie-105");
+        Assert.Equal(System.Net.HttpStatusCode.OK, metadata.StatusCode); // retried, then recovered
 
         string body = await Client.GetStringAsync("/metrics/prometheus");
         Assert.Contains("# TYPE metacache_upstream_rate_limited_total counter", body);

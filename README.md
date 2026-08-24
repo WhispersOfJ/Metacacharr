@@ -15,7 +15,8 @@ See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
   pinning, ranked manual "Fix Match" lists), `GET /library/metadata/{ratingKey}` (full
   metadata incl. cast/crew and content rating), and `GET /library/metadata/{ratingKey}/images`.
   All TMDB traffic flows through the local cache (single-flight, TTL, ETag revalidation,
-  stale-if-error) and artwork URLs are rewritten to the local `/img/{hash}` endpoint.
+  stale-if-error, 429 retry-with-backoff) and artwork URLs are rewritten to the local
+  `/img/{hash}` endpoint.
 - **TV end to end (M2):** shows, seasons, and episodes — match by title/year or by
   season/episode index / air date (structure-gated scoring), GUID pinning for all
   three kinds, full metadata with `parentTitle`/`grandparentTitle` + `parentIndex`,

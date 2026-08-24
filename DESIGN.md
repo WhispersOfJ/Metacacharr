@@ -277,8 +277,13 @@ image endpoint** (see §7.3) so Plex never fetches art from the internet.
 
 - **Stale-if-error:** serve stale entries when upstream 5xx / timeout / offline — this
   is what makes "internet down but library works" true.
-- **429 handling:** honor `Retry-After`, back off per host, never thundering-herd —
-  single-flight per key (only one in-flight upstream request per key; others await it).
+- **429 handling:** a rate-limited request is retried up to `CachePolicy.MaxRetries`
+  (default 2) instead of failing or serving stale — the wait honors `Retry-After` when
+  present, otherwise exponential backoff (base × 2^attempt), both capped by
+  `MaxRetryDelay` (default 30 s) so a distant Retry-After can't stall a refresh.
+  Single-flight per key means concurrent callers share one retry sequence, never
+  thundering-herding the provider. Every 429 response feeds the
+  `metacache_upstream_rate_limited_total` counter (each retried response counted once).
 
 ### 7.3 Image endpoint
 
@@ -702,9 +707,14 @@ season, and every episode, pulling show/season posters and episode stills throug
 image cache. All of it is cached, so the next real refresh is a cache hit.
 
 **ARR API keys ride in headers.** `ArrClient` queries `/api/v3/movie` and
-`/api/v3/series` with `X-Api-Key`, so keys never appear in URLs or logs. These calls
-are deliberately NOT routed through the upstream cache — the ARR APIs are the
-inventory source, change constantly, and are queried on demand.
+`/api/v3/series` with `X-Api-Key`, so keys never appear in URLs, logs, or cache keys
+(the key is the URL sha256). The calls DO flow through the upstream gateway, so ARR
+latency lands in the per-provider duration histogram (provider = the ARR host, e.g.
+`radarr`/`sonarr`), 429s count in the rate-limited counter and retry with backoff,
+and concurrent callers single-flight. The policy is a **zero TTL with stale-if-error
+OFF**: every call still reaches the ARR app (the inventory stays on-demand fresh —
+the stored entry is only an ETag validator), and a down ARR app fails fast as a warm
+error instead of silently warming from stale inventory.
 
 **The warmer writes `items` rows.** Every warmed movie/show/season/episode gets a row
 in the normalized store (kind/source/source-id), which finally exercises the `items`

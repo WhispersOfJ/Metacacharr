@@ -21,7 +21,7 @@ public sealed class CacheWarmer
     private readonly TvProviderService _tv;
     private readonly ImageCache _images;
     private readonly MetadataCache _items;
-    private readonly IUpstreamHttp _http;
+    private readonly UpstreamCache _upstream;
     private readonly ArrOptions _options;
     private readonly ILogger<CacheWarmer> _logger;
 
@@ -34,7 +34,7 @@ public sealed class CacheWarmer
         TvProviderService tv,
         ImageCache images,
         MetadataCache items,
-        IUpstreamHttp http,
+        UpstreamCache upstream,
         ArrOptions options,
         ILogger<CacheWarmer> logger)
     {
@@ -43,7 +43,7 @@ public sealed class CacheWarmer
         _tv = tv;
         _images = images;
         _items = items;
-        _http = http;
+        _upstream = upstream;
         _options = options;
         _logger = logger;
     }
@@ -106,7 +106,7 @@ public sealed class CacheWarmer
         if (string.IsNullOrWhiteSpace(_options.RadarrUrl))
             return WarmResult.SkippedRun("movies");
 
-        var client = new ArrClient(_options.RadarrUrl, _options.RadarrApiKey, _http);
+        var client = new ArrClient(_options.RadarrUrl, _options.RadarrApiKey, _upstream);
         IReadOnlyList<ArrMovie> movies = await client.GetMoviesAsync(ct).ConfigureAwait(false);
         _logger.LogInformation("Warming {Count} movies from Radarr", movies.Count);
 
@@ -143,7 +143,7 @@ public sealed class CacheWarmer
         if (string.IsNullOrWhiteSpace(_options.SonarrUrl))
             return WarmResult.SkippedRun("shows");
 
-        var client = new ArrClient(_options.SonarrUrl, _options.SonarrApiKey, _http);
+        var client = new ArrClient(_options.SonarrUrl, _options.SonarrApiKey, _upstream);
         IReadOnlyList<ArrSeries> series = await client.GetSeriesAsync(ct).ConfigureAwait(false);
         _logger.LogInformation("Warming {Count} series from Sonarr", series.Count);
 

@@ -278,13 +278,76 @@ public class UpstreamCacheTests
     {
         using var f = new Fixture();
         f.SeedStale(body: "old-body");
-        f.Upstream.Handler = _ => Error(429, retryAfter: DateTimeOffset.UtcNow.AddSeconds(10));
+        f.Upstream.Handler = _ => Error(429);
+        var policy = new CachePolicy(TimeSpan.FromHours(1), MaxRetries: 0); // retries off: count only
 
         // 429 with a stale entry → served stale; the throttle is still counted.
-        var result = await f.Cache.GetOrFetchAsync(Url, Hour());
+        var result = await f.Cache.GetOrFetchAsync(Url, policy);
         Assert.Equal(CacheSource.Stale, result.Source);
 
         Assert.Equal(1, f.Metrics.Snapshot().RateLimitedCounts["tmdb"]);
+    }
+
+    [Fact]
+    public async Task Rate_limited_cold_miss_retries_with_backoff_then_succeeds()
+    {
+        using var f = new Fixture();
+        int calls = 0;
+        f.Upstream.Handler = _ => calls++ == 0 ? Error(429) : Ok("recovered");
+        var policy = new CachePolicy(TimeSpan.FromHours(1), RetryBaseSeconds: 0.001);
+
+        var result = await f.Cache.GetOrFetchAsync(Url, policy);
+
+        Assert.Equal(CacheSource.Upstream, result.Source);
+        Assert.Equal("recovered", TestBytes.Read(result.Body));
+        Assert.Equal(2, f.Upstream.Requests.Count);
+        // The retried 429 was counted once; the final 200 is not a rate-limit response.
+        Assert.Equal(1, f.Metrics.Snapshot().RateLimitedCounts["tmdb"]);
+    }
+
+    [Fact]
+    public async Task Rate_limited_retry_after_is_honored_and_capped()
+    {
+        using var f = new Fixture();
+        int calls = 0;
+        // Retry-After says +10 s, but the cap (20 ms) makes the wait near-instant.
+        f.Upstream.Handler = _ => calls++ == 0
+            ? Error(429, retryAfter: DateTimeOffset.UtcNow.AddSeconds(10))
+            : Ok("recovered");
+        var policy = new CachePolicy(TimeSpan.FromHours(1), MaxRetryDelay: TimeSpan.FromMilliseconds(20));
+
+        var result = await f.Cache.GetOrFetchAsync(Url, policy);
+
+        Assert.Equal(CacheSource.Upstream, result.Source);
+        Assert.Equal(2, f.Upstream.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Rate_limited_after_exhaustion_serves_stale()
+    {
+        using var f = new Fixture();
+        f.SeedStale(body: "old-body");
+        f.Upstream.Handler = _ => Error(429);
+        var policy = new CachePolicy(TimeSpan.FromHours(1), MaxRetries: 1, RetryBaseSeconds: 0.001);
+
+        var result = await f.Cache.GetOrFetchAsync(Url, policy);
+
+        Assert.Equal(CacheSource.Stale, result.Source);
+        Assert.Equal(2, f.Upstream.Requests.Count);
+        Assert.Equal(2, f.Metrics.Snapshot().RateLimitedCounts["tmdb"]); // retried + final
+    }
+
+    [Fact]
+    public async Task Rate_limited_after_exhaustion_throws_on_cold_miss()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Error(429);
+        var policy = new CachePolicy(TimeSpan.FromHours(1), MaxRetries: 1, RetryBaseSeconds: 0.001);
+
+        var ex = await Assert.ThrowsAsync<UpstreamException>(() => f.Cache.GetOrFetchAsync(Url, policy));
+
+        Assert.Equal(429, ex.StatusCode);
+        Assert.Equal(2, f.Upstream.Requests.Count);
     }
 
     [Fact]
