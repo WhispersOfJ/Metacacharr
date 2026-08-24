@@ -46,6 +46,16 @@ var tmdbOptions = new TmdbOptions(
     ImageBaseUrl: tmdbSection["ImageBaseUrl"] ?? "https://image.tmdb.org/t/p/original",
     Auth: tmdbAuth);
 builder.Services.AddTmdbClient(tmdbOptions);
+
+// TVDB v4 client (DESIGN.md §15.9): season/episode metadata as a fallback/augmentation
+// source behind TMDB. The login token lives in memory only; a blank key is allowed and
+// the client throws TvdbConfigurationException on use until one is set.
+var tvdbSection = builder.Configuration.GetSection("Metacache:Tvdb");
+var tvdbOptions = new TvdbOptions(
+    ApiKey: tvdbSection["ApiKey"] ?? "",
+    BaseUrl: tvdbSection["BaseUrl"] ?? "https://api4.thetvdb.com");
+builder.Services.AddTvdbClient(tvdbOptions);
+
 builder.Services.AddMetacachePlexProviders();
 
 // M3 cache warming: Radarr/Sonarr become the inventory (DESIGN.md §8). A blank URL

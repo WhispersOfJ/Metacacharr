@@ -21,15 +21,18 @@ public sealed class TvProviderService
     private const int ManualShowEnrichDepth = 8;
 
     private readonly TmdbClient _tmdb;
+    private readonly TvdbClient _tvdb;
     private readonly TmdbOptions _options;
     private readonly MatchPolicy _policy;
     private readonly ImageCache _images;
     private readonly ILogger<TvProviderService> _logger;
 
     public TvProviderService(
-        TmdbClient tmdb, TmdbOptions options, MatchPolicy policy, ImageCache images, ILogger<TvProviderService> logger)
+        TmdbClient tmdb, TvdbClient tvdb, TmdbOptions options, MatchPolicy policy, ImageCache images,
+        ILogger<TvProviderService> logger)
     {
         _tmdb = tmdb;
+        _tvdb = tvdb;
         _options = options;
         _policy = policy;
         _images = images;
@@ -235,7 +238,11 @@ public sealed class TvProviderService
         return await _tmdb.SearchShowsAsync(hint.Title, hint.Year, hint.Language, ct);
     }
 
-    /// <summary>Episodes for a season/episode match: just the hinted season, or all seasons when only an air date / manual search is given.</summary>
+    /// <summary>
+    /// Episodes for a season/episode match: just the hinted season, or all seasons when
+    /// only an air date / manual search is given. When TMDB has the show but no episode
+    /// data at all, augments from TVDB (§15.9) so index/air-date matching still works.
+    /// </summary>
     private async Task<IReadOnlyList<TmdbEpisode>> GetEpisodesAsync(TmdbShow show, MatchHint hint, CancellationToken ct)
     {
         IReadOnlyList<int> seasonNumbers = (show.Seasons ?? []).Select(s => s.SeasonNumber).ToList();
@@ -244,11 +251,30 @@ public sealed class TvProviderService
             if (!seasonNumbers.Contains(only))
                 return [];
             TmdbSeason season = await _tmdb.GetSeasonAsync(show.Id, only, hint.Language, ct);
-            return season.Episodes ?? [];
+            IReadOnlyList<TmdbEpisode> seasonEpisodes = season.Episodes ?? [];
+            return seasonEpisodes.Count > 0 ? seasonEpisodes : await TvdbEpisodesOrEmptyAsync(show.Id, ct);
         }
 
         TmdbSeason[] seasons = await Task.WhenAll(seasonNumbers.Select(n => _tmdb.GetSeasonAsync(show.Id, n, hint.Language, ct)));
-        return seasons.SelectMany(s => s.Episodes ?? []).ToList();
+        IReadOnlyList<TmdbEpisode> episodes = seasons.SelectMany(s => s.Episodes ?? []).ToList();
+        return episodes.Count > 0 ? episodes : await TvdbEpisodesOrEmptyAsync(show.Id, ct);
+    }
+
+    /// <summary>All episodes from TVDB via the show's tvdb external id, or empty when TVDB has none either.</summary>
+    private async Task<IReadOnlyList<TmdbEpisode>> TvdbEpisodesOrEmptyAsync(int tmdbShowId, CancellationToken ct)
+    {
+        try
+        {
+            TmdbExternalIds ids = await _tmdb.GetShowExternalIdsAsync(tmdbShowId, ct);
+            if (ids.TvdbId is not { } tvdbId)
+                return [];
+            TvdbSeriesEpisodes? series = await _tvdb.GetSeriesEpisodesAsync(tvdbId, ct);
+            return (series?.Episodes ?? []).Select(TvdbMapper.ToTmdbEpisode).ToList();
+        }
+        catch (TmdbNotFoundException)
+        {
+            return [];
+        }
     }
 
     // ---- metadata ----
@@ -299,14 +325,56 @@ public sealed class TvProviderService
         if (!int.TryParse(showId, NumberStyles.None, CultureInfo.InvariantCulture, out int id))
             return null;
 
-        TmdbEpisode episode = await _tmdb.GetEpisodeAsync(id, seasonNumber, episodeNumber, language, cancellationToken);
+        TmdbEpisode episode;
+        string? tvdbStillLocal = null;
+        string? tvdbEpisodeGuid = null;
+        try
+        {
+            episode = await _tmdb.GetEpisodeAsync(id, seasonNumber, episodeNumber, language, cancellationToken);
+        }
+        catch (TmdbNotFoundException)
+        {
+            // TMDB lacks the episode (obscure shows often have the series but no episode
+            // rows) — fall back to TVDB via the show's tvdb external id (§15.9).
+            TvdbEpisode? tvdb = await TryGetTvdbEpisodeAsync(id, seasonNumber, episodeNumber, cancellationToken);
+            if (tvdb is null)
+                throw; // rethrow keeps the 404 response
+            episode = TvdbMapper.ToTmdbEpisode(tvdb);
+            if (!string.IsNullOrEmpty(tvdb.Image))
+                _images.RegisterUrl(tvdb.Image);
+            tvdbStillLocal = tvdb.Image is null ? null : ImageCache.RewriteToLocalPath(tvdb.Image);
+            tvdbEpisodeGuid = $"tvdb://{tvdb.Id}";
+        }
+
         TmdbShow show = await _tmdb.GetShowAsync(id, language, cancellationToken);
         RegisterShowImages(show);
         if (_tmdb.ImageUrl(episode.StillPath) is { } still)
             _images.RegisterUrl(still);
 
         MetadataItem item = TvMapper.ToEpisodeItem(episode, show, ProviderIdentities.Tv, _options.ImageBaseUrl);
+        if (tvdbStillLocal is not null)
+            item = item with { Thumb = tvdbStillLocal };
+        if (tvdbEpisodeGuid is not null)
+            item = item with { GuidItems = [new GuidItem(tvdbEpisodeGuid)] };
         return new MetadataContainer(0, 1, ProviderIdentities.Tv, 1, [item]);
+    }
+
+    /// <summary>The TVDB episode at the given structure position, or null when TVDB lacks it too.</summary>
+    private async Task<TvdbEpisode?> TryGetTvdbEpisodeAsync(
+        int tmdbShowId, int seasonNumber, int episodeNumber, CancellationToken ct)
+    {
+        try
+        {
+            TmdbExternalIds ids = await _tmdb.GetShowExternalIdsAsync(tmdbShowId, ct);
+            if (ids.TvdbId is not { } tvdbId)
+                return null;
+            TvdbSeriesEpisodes? series = await _tvdb.GetSeriesEpisodesAsync(tvdbId, ct);
+            return (series?.Episodes ?? []).FirstOrDefault(e => e.SeasonNumber == seasonNumber && e.Number == episodeNumber);
+        }
+        catch (TmdbNotFoundException)
+        {
+            return null;
+        }
     }
 
     // ---- children / grandchildren (paged) ----

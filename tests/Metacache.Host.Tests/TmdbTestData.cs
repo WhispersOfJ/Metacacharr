@@ -12,6 +12,8 @@ public static class TmdbTestData
 {
     public const string BaseUrl = "https://api.themoviedb.org/3";
 
+    public const string TvdbBaseUrl = "https://api4.thetvdb.com";
+
     public const string Movie105Json = """
         {
           "adult": false,
@@ -325,6 +327,73 @@ public static class TmdbTestData
         { "id": 15260, "imdb_id": "tt1305826", "tvdb_id": 152831 }
         """;
 
+    /// <summary>TVDB season shape with no episodes — triggers the TVDB augmentation/fallback path.</summary>
+    public const string SeasonNoEpisodesJson = """
+        {
+          "air_date": "2010-04-05",
+          "episodes": [],
+          "id": 3624,
+          "name": "Season 1",
+          "overview": "",
+          "poster_path": "/at-s1.jpg",
+          "season_number": 1
+        }
+        """;
+
+    /// <summary>TVDB v4 GET /v4/series/152831/episodes/default — Adventure Time.</summary>
+    public const string TvdbEpisodesJson = """
+        {
+          "status": "success",
+          "data": {
+            "series": {
+              "id": 152831,
+              "name": "Adventure Time",
+              "firstAired": "2010-04-05",
+              "overview": "Unlikely heroes Finn and Jake.",
+              "image": "https://artworks.thetvdb.com/banners/posters/152831-1.jpg"
+            },
+            "episodes": [
+              {
+                "id": 7100001,
+                "seriesId": 152831,
+                "name": "Slumber Party Panic",
+                "overview": "Finn and Jake fight zombies.",
+                "aired": "2010-04-05",
+                "number": 1,
+                "seasonNumber": 1,
+                "image": "https://artworks.thetvdb.com/banners/episodes/152831/7100001.jpg",
+                "runtime": 11
+              },
+              {
+                "id": 7100002,
+                "seriesId": 152831,
+                "name": "Trouble in Lumpy Space",
+                "overview": "Lumpy Space Princess visits.",
+                "aired": "2010-04-05",
+                "number": 2,
+                "seasonNumber": 1,
+                "runtime": 11
+              },
+              {
+                "id": 7100003,
+                "seriesId": 152831,
+                "name": "It Came from the Nightosphere",
+                "overview": "Marceline's dad shows up.",
+                "aired": "2010-10-11",
+                "number": 1,
+                "seasonNumber": 2,
+                "runtime": 11
+              }
+            ]
+          }
+        }
+        """;
+
+    /// <summary>TVDB v4 POST /v4/login response (in-memory token, never cached).</summary>
+    public const string TvdbLoginJson = """
+        { "status": "success", "data": { "token": "tvdb-test-token" } }
+        """;
+
     public const string FindTvJson = """
         {
           "movie_results": [],
@@ -425,6 +494,10 @@ public static class TmdbTestData
                 return Json(EmptyFindJson);
             if (path.StartsWith("/t/p/", StringComparison.Ordinal))
                 return new UpstreamResponse(200, TestBytes.Of("fake-jpeg-bytes"), "image/jpeg", null, null, null);
+            // TVDB v4 data calls route through the same gateway — served for the
+            // fallback/augmentation paths (§15.9). Login is POSTed via HttpClient.
+            if (path.EndsWith("/v4/series/152831/episodes/default", StringComparison.Ordinal))
+                return Json(TvdbEpisodesJson);
             throw new InvalidOperationException($"Unexpected upstream request: {request.Url}");
         };
 

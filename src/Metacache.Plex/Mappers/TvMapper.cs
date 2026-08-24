@@ -180,7 +180,7 @@ public static class TvMapper
             GrandparentTitle: NameOf(show),
             GrandparentThumb: Rewrite(show.PosterPath, imageBaseUrl),
             GrandparentArt: Rewrite(show.BackdropPath, imageBaseUrl),
-            GuidItems: [new GuidItem($"tmdb://{episode.Id}")]);
+            GuidItems: [new GuidItem($"{(episode.FromTvdb ? "tvdb" : "tmdb")}://{episode.Id}")]);
     }
 
     // ---- helpers ----

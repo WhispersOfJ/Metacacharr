@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using Metacache.Core.Cache;
+using Metacache.Host.Tests.Cache;
 using Metacache.Plex.Models;
 
 namespace Metacache.Host.Tests;
@@ -128,4 +130,36 @@ public class TvMatchEndpointTests : ProviderEndpointTestBase
         Assert.Equal(2, item.Children!.Size);
         Assert.Equal("tmdb-season-15260-1", item.Children.Metadata[0].RatingKey);
     }
+
+    [Fact]
+    public async Task Episode_match_augments_from_tvdb_when_tmdb_has_no_episode_data()
+    {
+        // TMDB has the show but its season payloads carry zero episodes — the scorer must
+        // fall back to TVDB (via the show's tvdb external id) so index matching still works.
+        Func<UpstreamRequest, UpstreamResponse> baseHandler = Upstream.Handler;
+        Upstream.Handler = request =>
+        {
+            string path = request.Url.AbsolutePath;
+            if (path.EndsWith("/tv/15260/season/1", StringComparison.Ordinal)
+                || path.EndsWith("/tv/15260/season/2", StringComparison.Ordinal))
+                return Json(TmdbTestData.SeasonNoEpisodesJson);
+            return baseHandler(request);
+        };
+
+        var response = await Client.PostAsync("/library/metadata/matches",
+            JsonBody("""{"type":4,"grandparentTitle":"Adventure Time","parentIndex":1,"index":1}"""));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        MetadataContainer container = (await ReadProviderAsync<MetadataContainerResponse>(response))!.MediaContainer;
+        MetadataItem item = Assert.Single(container.Metadata);
+        Assert.Equal("tmdb-episode-15260-1-1", item.RatingKey);
+        Assert.Equal("Slumber Party Panic", item.Title); // from TVDB, not TMDB
+        Assert.Equal("2010-04-05", item.OriginallyAvailableAt);
+        Assert.Equal(1, item.ParentIndex);
+        Assert.Equal(1, item.Index);
+        Assert.Equal("tvdb://7100001", Assert.Single(item.GuidItems!).Id); // honest source, not a tmdb-prefixed TVDB id
+    }
+
+    private static UpstreamResponse Json(string body) =>
+        new(200, TestBytes.Of(body), "application/json", null, null, null);
 }

@@ -27,6 +27,7 @@ public class CacheWarmerTests : IDisposable
             .AddMetacacheMatching(new ConfigurationBuilder().Build())
             .AddTmdbClient(new TmdbOptions(ApiKey: "test-api-key", BaseUrl: TmdbTestData.BaseUrl,
                 Auth: TmdbAuthMode.Bearer))
+            .AddTvdbClient(new TvdbOptions(ApiKey: "test-tvdb-key", BaseUrl: TmdbTestData.TvdbBaseUrl))
             .AddMetacachePlexProviders()
             .AddMetacacheWarming(options)
             .AddSingleton<IUpstreamHttp>(_upstream)
@@ -96,6 +97,7 @@ public class CacheWarmerTests : IDisposable
             .AddMetacacheCache(new CacheOptions(":memory:", _imageDir, 20L * 1024 * 1024, 10L * 1024 * 1024 * 1024))
             .AddMetacacheMatching(new ConfigurationBuilder().Build())
             .AddTmdbClient(new TmdbOptions(ApiKey: "k", BaseUrl: TmdbTestData.BaseUrl, Auth: TmdbAuthMode.Bearer))
+            .AddTvdbClient(new TvdbOptions(ApiKey: "k", BaseUrl: TmdbTestData.TvdbBaseUrl))
             .AddMetacachePlexProviders()
             .AddMetacacheWarming(options)
             .AddSingleton<IUpstreamHttp>(new FakeUpstream())

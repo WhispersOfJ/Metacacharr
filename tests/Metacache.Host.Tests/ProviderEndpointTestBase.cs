@@ -32,7 +32,14 @@ public abstract class ProviderEndpointTestBase : IDisposable
                 builder.UseSetting("Metacache:Images:Directory", _imageDir);
                 builder.UseSetting("Metacache:Tmdb:ApiKey", "test-api-key");
                 builder.UseSetting("Metacache:Tmdb:Auth", "Bearer");
-                builder.ConfigureTestServices(services => services.AddSingleton<IUpstreamHttp>(Upstream));
+                builder.UseSetting("Metacache:Tvdb:ApiKey", "test-tvdb-key");
+                builder.ConfigureTestServices(services =>
+                {
+                    services.AddSingleton<IUpstreamHttp>(Upstream);
+                    // TvdbClient's login POST is the only raw-HttpClient traffic (all data
+                    // calls route through the fake upstream); never let tests hit the real API.
+                    services.AddSingleton(_ => new HttpClient(new TestTvdbLoginHandler()));
+                });
             });
         Upstream.Route();
     }
@@ -54,4 +61,15 @@ public abstract class ProviderEndpointTestBase : IDisposable
         await response.Content.ReadFromJsonAsync<T>(TestJsonOptions);
 
     protected static StringContent JsonBody(string json) => new(json, Encoding.UTF8, "application/json");
+
+    /// <summary>Answers TVDB /v4/login POSTs with a fixed token so tests never hit the real API.</summary>
+    private sealed class TestTvdbLoginHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(TmdbTestData.TvdbLoginJson, Encoding.UTF8, "application/json")
+            });
+    }
 }

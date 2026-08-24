@@ -25,6 +25,7 @@ public class ScheduledWarmHostedServiceTests : IDisposable
             .AddMetacacheCache(new CacheOptions(":memory:", _imageDir, 20L * 1024 * 1024, 10L * 1024 * 1024 * 1024))
             .AddMetacacheMatching(new ConfigurationBuilder().Build())
             .AddTmdbClient(new TmdbOptions(ApiKey: "test-api-key", BaseUrl: TmdbTestData.BaseUrl, Auth: TmdbAuthMode.Bearer))
+            .AddTvdbClient(new TvdbOptions(ApiKey: "test-tvdb-key", BaseUrl: TmdbTestData.TvdbBaseUrl))
             .AddMetacachePlexProviders()
             .AddMetacacheWarming(new ArrOptions(), new WarmOptions(Enabled: true, ScheduleTime: "03:00"))
             .AddSingleton<IUpstreamHttp>(_upstream)

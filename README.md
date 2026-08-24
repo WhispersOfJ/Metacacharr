@@ -24,6 +24,11 @@ See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
   `…/grandchildren` (`X-Plex-Container-Size` / `-Start`). Cast/crew (`Person[]`,
   `Role[]`, `Director[]`, `Writer[]`) and content ratings (`X-Plex-Country`-aware)
   ship for both movies and TV.
+- **TVDB fallback (M2+):** when TMDB lacks an episode (or a whole season's episodes),
+  the TVDB v4 provider (optional `Metacache__Tvdb__ApiKey`) supplies it — episode
+  metadata falls back to TVDB via the show's `tvdb_id`, and episode matching augments
+  from the full TVDB episode list. Login token stays in memory; data flows through the
+  same gateway (24 h TTL, histogram `provider="api4.thetvdb.com"`).
 - `GET /healthz` liveness check.
 - Admin surface: `GET /cache/stats` (cache sizes) and `POST /cache/purge` (expired-row
   cleanup), returning `{ "removed": n }`.
@@ -72,6 +77,8 @@ dotnet run --project src/Metacache.Host
 | `Metacache__Tmdb__ApiKey` | *(none)* | **Required for M1.** Your TMDB API Read Access Token **or** legacy v3 API key. With `Auth=Bearer`/`Auto` the key never appears in URLs, cache keys, or logs. Get one at themoviedb.org → Settings → API |
 | `Metacache__Tmdb__Auth` | `Auto` | `Auto` probes once and picks `Bearer` (API Read Access Token) or `Query` (legacy v3 key); force either with `Bearer`/`Query`. In `Query` mode the cache key is still computed from the secret-free URL |
 | `Metacache__Tmdb__BaseUrl` / `ImageBaseUrl` | TMDB v3 / `t/p/original` | Upstream endpoints (override for proxies) |
+| `Metacache__Tvdb__ApiKey` | *(none)* | **TVDB v4 API key** — powers the episode fallback/augmentation: when TMDB lacks an episode (or all episodes of a season), TVDB supplies it. The key is used only for a login POST; the token stays in memory and never touches the cache DB. Get one at thetvdb.com → Settings → API |
+| `Metacache__Tvdb__BaseUrl` | `https://api4.thetvdb.com` | TVDB v4 endpoint (override for proxies) |
 | `Metacache__Arr__RadarrUrl` / `RadarrApiKey` | *(none)* | Radarr instance + API key for `/warm/movies` (blank URL disables the source) |
 | `Metacache__Arr__SonarrUrl` / `SonarrApiKey` | *(none)* | Sonarr instance + API key for `/warm/shows` (blank URL disables the source) |
 | `Metacache__Arr__Concurrency` | `4` | How many items a warm run processes in parallel |

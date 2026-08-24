@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using Metacache.Core.Cache;
+using Metacache.Host.Tests.Cache;
 using Metacache.Plex.Models;
 
 namespace Metacache.Host.Tests;
@@ -180,4 +182,36 @@ public class TvMetadataEndpointTests : ProviderEndpointTestBase
         Assert.Contains(container.Image, i => i.Type == "coverPoster");
         Assert.Contains(container.Image, i => i.Type == "background");
     }
+
+    [Fact]
+    public async Task Episode_metadata_falls_back_to_tvdb_when_tmdb_lacks_the_episode()
+    {
+        // TMDB 404s on the episode row, but has the show and its tvdb external id — the
+        // item must come from TVDB with a tvdb guid and a locally-rewritten artwork URL.
+        Func<UpstreamRequest, UpstreamResponse> baseHandler = Upstream.Handler;
+        Upstream.Handler = request =>
+        {
+            string path = request.Url.AbsolutePath;
+            if (path.EndsWith("/tv/15260/season/1/episode/1", StringComparison.Ordinal))
+                return JsonStatus(404, """{ "status_code": 34 }""");
+            return baseHandler(request);
+        };
+
+        var response = await Client.GetAsync("/library/metadata/tmdb-episode-15260-1-1");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        MetadataContainer container = (await ReadProviderAsync<MetadataContainerResponse>(response))!.MediaContainer;
+        MetadataItem item = Assert.Single(container.Metadata);
+        Assert.Equal("tmdb-episode-15260-1-1", item.RatingKey);
+        Assert.Equal("Slumber Party Panic", item.Title); // from TVDB
+        Assert.Equal("2010-04-05", item.OriginallyAvailableAt);
+        Assert.Equal("tvdb://7100001", Assert.Single(item.GuidItems!).Id);
+        Assert.StartsWith("/img/", item.Thumb); // TVDB artwork rewritten to the local endpoint
+    }
+
+    private static UpstreamResponse Json(string body) =>
+        new(200, TestBytes.Of(body), "application/json", null, null, null);
+
+    private static UpstreamResponse JsonStatus(int status, string body) =>
+        new(status, TestBytes.Of(body), "application/json", null, null, null);
 }

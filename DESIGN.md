@@ -584,6 +584,34 @@ filtering, thresholds and manual/auto shaping are shared with movie matching.
 `MatchScorer` dispatch, `TitleNormalizer`, `FilenameParser` with SxxEyy/`Season N`,
 `MatchPolicy` TV weights) with unit tests — see `tests/…/Matching/`.
 
+### 15.8 TVDB fallback & augmentation
+
+TVDB (v4) is a second TV source behind TMDB, wired in at two points where TMDB is
+chronically thin — old/soap/obscure shows often have the series row but no episode
+data:
+
+- **Episode metadata fallback.** When `GET /tv/{id}/season/{s}/episode/{e}` 404s, the
+  show's `tvdb_id` (from `/tv/{id}/external_ids`) resolves the TVDB series and the
+  episode at that structure position is served instead. The item keeps its
+  `tmdb-*` rating key (Plex already routes on it) but carries a truthful `tvdb://{id}`
+  GuidItem and a locally-rewritten `/img/` thumb from TVDB's artwork URL.
+- **Match augmentation.** When TMDB returns **zero** episodes for a show (or for the
+  hinted season), episode matching falls back to the full TVDB episode list so
+  index/air-date matching still works; candidates map through `TvdbMapper` into the
+  same `TmdbEpisode` shape the scorer consumes (`FromTvdb` keeps GUIDs honest).
+
+**Client (`TvdbClient`).** TVDB v4 requires a bearer token from `POST /v4/login` — the
+key alone is not accepted on data endpoints. The login is kept **in memory only**
+(~25 days) and deliberately never routed through `UpstreamCache`, so a credential
+never persists in the cache DB (same rule as the TMDB key, §16). A 401 from a data
+call (expired/revoked token) drops the token, re-logs in, and retries once. Data calls
+use `GET /v4/series/{id}/episodes/default` — the full series plus every episode in one
+shot (no paging) — routed through the gateway with a 24 h TTL, single-flight, ETag
+revalidation and stale-if-error, the bearer token riding only in the Authorization
+header, so TVDB latency lands in the per-provider duration histogram
+(`provider="api4.thetvdb.com"`). A blank `Metacache:Tvdb:ApiKey` throws
+`TvdbConfigurationException` on use; fallbacks then simply never fire.
+
 ---
 
 ## 16. M1 — movies shipped (implementation notes)

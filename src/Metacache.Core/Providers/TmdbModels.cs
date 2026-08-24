@@ -119,7 +119,11 @@ public sealed record TmdbEpisode(
     [property: JsonPropertyName("air_date")] string? AirDate,
     [property: JsonPropertyName("still_path")] string? StillPath,
     [property: JsonPropertyName("runtime")] int? Runtime,
-    [property: JsonPropertyName("vote_average")] double VoteAverage);
+    [property: JsonPropertyName("vote_average")] double VoteAverage)
+{
+    /// <summary>True when adapted from TVDB (see TvdbMapper) so GUIDs stay honest.</summary>
+    [JsonIgnore] public bool FromTvdb { get; init; }
+}
 
 // ---- credits / ratings / ids ----
 

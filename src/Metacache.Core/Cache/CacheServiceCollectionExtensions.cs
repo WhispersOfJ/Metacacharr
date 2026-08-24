@@ -20,8 +20,11 @@ public static class CacheServiceCollectionExtensions
         services.AddSingleton<UpstreamMetrics>();
         services.AddSingleton<ScrapeHistory>();
         services.AddSingleton(_ => new CacheStore(options.DataSource));
-        services.AddSingleton<IUpstreamHttp>(_ =>
-            new HttpUpstreamClient(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }));
+        // Shared HttpClient: the gateway wraps it for GETs, and clients that need a raw
+        // POST (e.g. TVDB's /v4/login, which must never be cached) inject it directly.
+        services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
+        services.AddSingleton<IUpstreamHttp>(sp =>
+            new HttpUpstreamClient(sp.GetRequiredService<HttpClient>()));
         services.AddSingleton(_ => new ImageStore(options.ImageDirectory, options.MaxImageBytes));
         services.AddSingleton<UpstreamCache>();
         services.AddSingleton<MetadataCache>();
