@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Metacache.Core;
+using Metacache.Core.Cache;
 using Metacache.Core.Matching;
 using Metacache.Core.Providers;
 using Metacache.Plex.Mappers;
@@ -23,13 +24,16 @@ public sealed class MovieProviderService
     private readonly TmdbClient _tmdb;
     private readonly TmdbOptions _options;
     private readonly MatchPolicy _policy;
+    private readonly ImageCache _images;
     private readonly ILogger<MovieProviderService> _logger;
 
-    public MovieProviderService(TmdbClient tmdb, TmdbOptions options, MatchPolicy policy, ILogger<MovieProviderService> logger)
+    public MovieProviderService(
+        TmdbClient tmdb, TmdbOptions options, MatchPolicy policy, ImageCache images, ILogger<MovieProviderService> logger)
     {
         _tmdb = tmdb;
         _options = options;
         _policy = policy;
+        _images = images;
         _logger = logger;
     }
 
@@ -50,6 +54,7 @@ public sealed class MovieProviderService
         }
 
         TmdbMovie movie = await _tmdb.GetMovieAsync(IdOf(best.Candidate.Id), hint.Language, cancellationToken);
+        RegisterImages(movie);
         _logger.LogInformation("Auto-matched '{Title}' → tmdb {Id} (score {Score:F2})", hint.Title, movie.Id, best.Score);
         return new MetadataContainer(0, 1, ProviderIdentities.Movie, 1,
             [MovieMapper.ToMatchItem(movie, ProviderIdentities.Movie, _options.ImageBaseUrl, hint.Language)]);
@@ -63,6 +68,7 @@ public sealed class MovieProviderService
             return null;
 
         TmdbMovie movie = await _tmdb.GetMovieAsync(id, language, cancellationToken);
+        RegisterImages(movie);
         var item = MovieMapper.ToMetadata(movie, ProviderIdentities.Movie, _options.ImageBaseUrl, language);
         return new MetadataContainer(0, 1, ProviderIdentities.Movie, 1, [item]);
     }
@@ -75,6 +81,7 @@ public sealed class MovieProviderService
             return null;
 
         TmdbMovie movie = await _tmdb.GetMovieAsync(id, language, cancellationToken);
+        RegisterImages(movie);
         IReadOnlyList<ImageAsset> images = MovieMapper.BuildImages(movie, _options.ImageBaseUrl) ?? [];
         return new ImageContainer(0, images.Count, ProviderIdentities.Movie, images.Count, images);
     }
@@ -120,6 +127,8 @@ public sealed class MovieProviderService
     {
         IReadOnlyList<ScoredMatch> top = scored.Take(ManualEnrichDepth).ToList();
         TmdbMovie[] movies = await Task.WhenAll(top.Select(s => _tmdb.GetMovieAsync(IdOf(s.Candidate.Id), hint.Language, cancellationToken)));
+        foreach (TmdbMovie movie in movies)
+            RegisterImages(movie);
         var items = movies
             .Select(m => MovieMapper.ToMatchItem(m, ProviderIdentities.Movie, _options.ImageBaseUrl, hint.Language))
             .ToList();
@@ -129,6 +138,18 @@ public sealed class MovieProviderService
 
     private static MetadataContainer Empty() =>
         new(0, 0, ProviderIdentities.Movie, 0, []);
+
+    /// <summary>
+    /// Tells the image cache about this movie's artwork so the /img/{hash} URLs the
+    /// mapper emits resolve on Plex's first request (fetch happens lazily then).
+    /// </summary>
+    private void RegisterImages(TmdbMovie movie)
+    {
+        if (_tmdb.ImageUrl(movie.PosterPath) is { } poster)
+            _images.RegisterUrl(poster);
+        if (_tmdb.ImageUrl(movie.BackdropPath) is { } backdrop)
+            _images.RegisterUrl(backdrop);
+    }
 
     private static MatchCandidate CandidateFrom(TmdbMovieSummary summary) => new(
         Id: summary.Id.ToString(CultureInfo.InvariantCulture),

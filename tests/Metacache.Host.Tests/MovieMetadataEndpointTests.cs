@@ -48,6 +48,24 @@ public class MovieMetadataEndpointTests : ProviderEndpointTestBase
     }
 
     [Fact]
+    public async Task Rewritten_image_urls_are_fetchable_on_first_request()
+    {
+        var metadata = await Client.GetAsync("/library/metadata/tmdb-movie-105");
+        MetadataContainer container = (await ReadProviderAsync<MetadataContainerResponse>(metadata))!.MediaContainer;
+        string imgPath = container.Metadata[0].Thumb!;
+        Assert.StartsWith("/img/", imgPath);
+
+        // The provider registered the URL when it rewrote it, so the very first
+        // /img request resolves (fetches + stores) instead of 404ing.
+        var image = await Client.GetAsync(imgPath);
+
+        Assert.Equal(HttpStatusCode.OK, image.StatusCode);
+        Assert.Equal("image/jpeg", image.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("fake-jpeg-bytes", await image.Content.ReadAsStringAsync());
+        Assert.Equal(2, Upstream.Requests.Count); // details + one image fetch
+    }
+
+    [Fact]
     public async Task Metadata_is_served_from_cache_on_refresh()
     {
         await Client.GetAsync("/library/metadata/tmdb-movie-105");

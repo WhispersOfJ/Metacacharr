@@ -21,8 +21,14 @@ public sealed class TmdbConfigurationException : Exception
 /// Typed TMDB v3 client (DESIGN.md §15.5 step 2). Every call routes through
 /// <see cref="UpstreamCache"/>, so search and details are single-flighted, TTL'd,
 /// ETag-revalidated and stale-if-error served exactly like any other upstream traffic
-/// (§7.2: search 12 h, item JSON 24 h). The API key rides as an `Authorization: Bearer`
-/// header so URLs, cache keys and logs never contain it.
+/// (§7.2: search 12 h, item JSON 24 h).
+///
+/// Auth (§16): TMDB's API Read Access Token is sent as `Authorization: Bearer` (the
+/// key then never appears in URLs, cache keys or logs). Legacy v3 API keys only work
+/// as the `api_key` query parameter — in that mode the cache key is computed from the
+/// secret-free URL via <see cref="UpstreamCache"/>'s cacheKey override, so the key
+/// still never lands in the cache DB. <see cref="TmdbAuthMode.Auto"/> (default) probes
+/// once per process and picks whichever the key accepts.
 /// </summary>
 public sealed class TmdbClient
 {
@@ -34,14 +40,16 @@ public sealed class TmdbClient
     private readonly TmdbOptions _options;
     private readonly UpstreamCache _cache;
     private readonly ILogger<TmdbClient> _logger;
-    private readonly IReadOnlyDictionary<string, string> _authHeaders;
+    private readonly IReadOnlyDictionary<string, string> _bearerHeaders;
+    private readonly object _modeLock = new();
+    private Task<TmdbAuthMode>? _modeTask;
 
     public TmdbClient(TmdbOptions options, UpstreamCache cache, ILogger<TmdbClient> logger)
     {
         _options = options;
         _cache = cache;
         _logger = logger;
-        _authHeaders = string.IsNullOrWhiteSpace(options.ApiKey)
+        _bearerHeaders = string.IsNullOrWhiteSpace(options.ApiKey)
             ? new Dictionary<string, string>()
             : new Dictionary<string, string> { ["Authorization"] = $"Bearer {options.ApiKey}" };
     }
@@ -107,12 +115,28 @@ public sealed class TmdbClient
     private async Task<T?> GetJsonAsync<T>(string url, CachePolicy policy, CancellationToken cancellationToken)
         where T : class
     {
-        if (_authHeaders.Count == 0)
+        if (string.IsNullOrWhiteSpace(_options.ApiKey))
             throw new TmdbConfigurationException(
-                "Metacache:Tmdb:ApiKey is not set. Add your TMDB API Read Access Token to configuration.");
+                "Metacache:Tmdb:ApiKey is not set. Add your TMDB API Read Access Token (or v3 API key) to configuration.");
+
+        TmdbAuthMode mode = await ResolveAuthModeAsync().ConfigureAwait(false);
+
+        string requestUrl = url;
+        string? cacheKey = null;
+        IReadOnlyDictionary<string, string>? headers = null;
+        if (mode == TmdbAuthMode.Query)
+        {
+            // Key rides in the URL, but the cache key is the secret-free URL.
+            cacheKey = UpstreamCache.ComputeKey(url);
+            requestUrl = $"{url}&api_key={Uri.EscapeDataString(_options.ApiKey)}";
+        }
+        else
+        {
+            headers = _bearerHeaders;
+        }
 
         CachedResponse response = await _cache
-            .GetOrFetchAsync(url, policy, cancellationToken, headers: _authHeaders)
+            .GetOrFetchAsync(requestUrl, policy, cancellationToken, headers: headers, cacheKey: cacheKey)
             .ConfigureAwait(false);
 
         if (response.StatusCode == 404)
@@ -123,10 +147,61 @@ public sealed class TmdbClient
         return JsonSerializer.Deserialize<T>(response.Body, JsonOptions);
     }
 
+    /// <summary>Resolves the auth mode: explicit config wins; Auto probes once (cached per process).</summary>
+    private Task<TmdbAuthMode> ResolveAuthModeAsync()
+    {
+        if (_options.Auth != TmdbAuthMode.Auto)
+            return Task.FromResult(_options.Auth);
+
+        lock (_modeLock)
+        {
+            _modeTask ??= ProbeAuthModeAsync();
+        }
+
+        return AwaitModeAsync();
+    }
+
+    private async Task<TmdbAuthMode> AwaitModeAsync()
+    {
+        try
+        {
+            return await _modeTask!.ConfigureAwait(false);
+        }
+        catch
+        {
+            // A failed probe must not poison the process: retry on the next request.
+            lock (_modeLock)
+            {
+                _modeTask = null;
+            }
+            throw;
+        }
+    }
+
+    /// <summary>Probes /authentication with Bearer; a 401 means the key is a legacy v3 key → Query mode.</summary>
+    private async Task<TmdbAuthMode> ProbeAuthModeAsync()
+    {
+        string url = BuildUrl("/authentication", query: null);
+        try
+        {
+            await _cache.GetOrFetchAsync(url, SearchPolicy, headers: _bearerHeaders).ConfigureAwait(false);
+            _logger.LogInformation("TMDB API key accepted via Authorization: Bearer");
+            return TmdbAuthMode.Bearer;
+        }
+        catch (UpstreamException ex) when (ex.StatusCode == 401)
+        {
+            _logger.LogInformation("TMDB API key rejected as Bearer (legacy v3 key?) — using api_key query param");
+            return TmdbAuthMode.Query;
+        }
+    }
+
     /// <summary>Builds a normalized URL: sorted query params, URI-escaped, no API key.</summary>
-    private string BuildUrl(string path, IReadOnlyDictionary<string, string?> query)
+    private string BuildUrl(string path, IReadOnlyDictionary<string, string?>? query)
     {
         string baseUrl = _options.BaseUrl.TrimEnd('/');
+        if (query is null || query.Count == 0)
+            return $"{baseUrl}{path}";
+
         string queryString = string.Join('&', query
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
             .Select(kv => kv.Value is null

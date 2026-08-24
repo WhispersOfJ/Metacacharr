@@ -583,12 +583,17 @@ filtering, thresholds and manual/auto shaping are shared with movie matching.
 M1 lands the full movie loop: Plex match → ranked result → metadata → local artwork,
 with every TMDB call behind the cache. Notes on the choices made:
 
-**TMDB auth is header-based.** The API key (API Read Access Token) is sent as
-`Authorization: Bearer` (TMDB v3 accepts it there), so URLs, cache keys and logs never
-contain the secret. This required a small, general extension to the cache gateway:
-`UpstreamRequest` now carries optional per-request headers, forwarded by
-`HttpUpstreamClient` — the ARR proxy face (M4) will reuse this for Sonarr/Radarr
-header keys.
+**TMDB auth is header-based — with a legacy fallback.** The API Read Access Token is
+sent as `Authorization: Bearer`, so URLs, cache keys and logs never contain the
+secret. A live probe found that legacy v3 API keys (32-char hex) are **rejected as
+Bearer (401)** and only work as the `api_key` query parameter — so `TmdbOptions.Auth`
+supports `Auto` (default: probes `/authentication` once per process and picks the
+mode the key accepts), `Bearer`, and `Query`. In `Query` mode the cache key is still
+computed from the secret-free URL via `UpstreamCache`'s new `cacheKey` override, so
+the key never lands in the cache DB. The header support itself required a small,
+general extension to the cache gateway: `UpstreamRequest` carries optional per-
+request headers, forwarded by `HttpUpstreamClient` — the ARR proxy face (M4) will
+reuse this for Sonarr/Radarr header keys.
 
 **M1 uses the raw-HTTP cache layer** (`UpstreamCache`) for all TMDB JSON — search/find
 12 h TTL, movie details 24 h — which already delivers single-flight, ETag
@@ -601,7 +606,11 @@ is find + one details call; a manual search enriches the top 8 candidates in par
 **Artwork is fully local.** `MovieMapper` rewrites every TMDB poster/backdrop URL to
 `/img/{sha256}` via `ImageCache.RewriteToLocalPath`; Plex pulls art from Metacache and
 `/img` fetches+stores on first request (self-healing). Match items carry a rewritten
-`thumb` too, so even the Fix Match dialog never touches the internet.
+`thumb` too, so even the Fix Match dialog never touches the internet. Live testing
+caught one hole: nothing registered those hashes before the first fetch, so the very
+first Plex image request 404'd — the provider service now calls
+`ImageCache.RegisterUrl` for each artwork URL it emits (a lazy, idempotent `urls`
+row), making every rewritten `/img/{hash}` resolvable from the moment it's served.
 
 **Schema quirk handled:** Plex's metadata object legitimately has both `guid` (string)
 and `Guid` (array) — plus `studio`/`Studio`. System.Text.Json's default

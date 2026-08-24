@@ -52,6 +52,22 @@ public sealed class ImageCache
     public static string RewriteToLocalPath(string upstreamUrl) =>
         $"/img/{UpstreamCache.ComputeKey(upstreamUrl)}";
 
+    /// <summary>
+    /// Registers an upstream image URL in the `urls` table WITHOUT fetching, so that
+    /// /img/{hash} can resolve it on the first request (fetch + store). The mapper
+    /// rewrites artwork to /img/{hash}; this makes those hashes known before any
+    /// fetch happens — otherwise the first Plex image request for a fresh match 404s.
+    /// Idempotent: an existing row (e.g. one with a real file path) is left untouched.
+    /// </summary>
+    public void RegisterUrl(string url)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(url);
+        string hash = UpstreamCache.ComputeKey(url);
+        if (_cache.GetUrl(hash) is not null)
+            return;
+        _cache.PutUrl(new CachedUrl(hash, url, Path: "", Size: 0, FetchedAt: _clock.UtcNow));
+    }
+
     /// <summary>Returns the image, fetching and storing it on miss.</summary>
     public async Task<ImageResult> GetOrFetchAsync(string url, CancellationToken cancellationToken = default)
     {

@@ -50,7 +50,8 @@ dotnet run --project src/Metacache.Host
 | `Metacache__DataPath` | `data/metacache.db` | SQLite cache file (created on first run) |
 | `Metacache__Matching__*` | (see `appsettings.json`) | Match-policy weights/thresholds, e.g. `Metacache__Matching__AutoMatchThreshold=0.75` |
 | `Metacache__Images__*` | `data/images`, 20 MB, 10 GB | Image cache dir, per-file cap (`MaxFileBytes`), total cap (`MaxTotalBytes`) |
-| `Metacache__Tmdb__ApiKey` | *(none)* | **Required for M1.** Your TMDB API Read Access Token — sent as an `Authorization: Bearer` header so it never appears in URLs, cache keys, or logs. Get one at themoviedb.org → Settings → API |
+| `Metacache__Tmdb__ApiKey` | *(none)* | **Required for M1.** Your TMDB API Read Access Token **or** legacy v3 API key. With `Auth=Bearer`/`Auto` the key never appears in URLs, cache keys, or logs. Get one at themoviedb.org → Settings → API |
+| `Metacache__Tmdb__Auth` | `Auto` | `Auto` probes once and picks `Bearer` (API Read Access Token) or `Query` (legacy v3 key); force either with `Bearer`/`Query`. In `Query` mode the cache key is still computed from the secret-free URL |
 | `Metacache__Tmdb__BaseUrl` / `ImageBaseUrl` | TMDB v3 / `t/p/original` | Upstream endpoints (override for proxies) |
 
 Env vars override `appsettings.json`, e.g.:

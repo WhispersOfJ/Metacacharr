@@ -139,6 +139,31 @@ public class ImageCacheTests : IDisposable
     }
 
     [Fact]
+    public async Task Registered_url_is_fetchable_on_first_request_without_clobbering_paths()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Jpeg("registered");
+        string hash = UpstreamCache.ComputeKey(Url);
+
+        f.Cache.RegisterUrl(Url);
+        CachedUrl? before = f.Store.GetUrl(hash);
+        Assert.NotNull(before);
+        Assert.False(f.ImageStore.Exists(hash)); // registered, not fetched
+
+        // Row exists but no file yet → GetByHashAsync (the /img endpoint path) fetches + stores.
+        ImageResult? result = await f.Cache.GetByHashAsync(hash);
+        Assert.NotNull(result);
+        Assert.Equal("registered", File.ReadAllText(result!.Path));
+        Assert.Equal(ImageSource.Upstream, result.Source);
+        Assert.Single(f.Upstream.Requests);
+
+        // Registering again must not clobber the stored file path.
+        f.Cache.RegisterUrl(Url);
+        Assert.Equal(result.Path, f.Store.GetUrl(hash)!.Path);
+        Assert.True(f.ImageStore.Exists(hash));
+    }
+
+    [Fact]
     public void RewriteToLocalPath_is_deterministic_and_unique()
     {
         string a = ImageCache.RewriteToLocalPath(Url);

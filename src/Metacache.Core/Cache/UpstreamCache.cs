@@ -46,12 +46,16 @@ public sealed class UpstreamCache
         string url,
         CachePolicy policy,
         CancellationToken cancellationToken = default,
-        IReadOnlyDictionary<string, string>? headers = null)
+        IReadOnlyDictionary<string, string>? headers = null,
+        string? cacheKey = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(url);
         cancellationToken.ThrowIfCancellationRequested();
 
-        string key = ComputeKey(url);
+        // cacheKey override: callers that must embed secrets in the request URL (e.g.
+        // TMDB's legacy api_key query param) compute the key from the secret-free URL
+        // so keys and the DB never contain credentials.
+        string key = cacheKey ?? ComputeKey(url);
         Task<CachedResponse> task = _flight.RunAsync(key, () => FetchCoreAsync(key, url, policy, headers));
         return await task.ConfigureAwait(false);
     }

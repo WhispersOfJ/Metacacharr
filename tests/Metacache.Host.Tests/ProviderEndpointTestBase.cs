@@ -18,20 +18,31 @@ public abstract class ProviderEndpointTestBase : IDisposable
 {
     protected readonly FakeUpstream Upstream = new();
     protected readonly WebApplicationFactory<Program> Factory;
+    private readonly string _imageDir;
 
     protected ProviderEndpointTestBase()
     {
+        // Isolated per-factory image dir (like the :memory: DB) so tests never see
+        // files left by an earlier run.
+        _imageDir = Path.Combine(Path.GetTempPath(), $"metacache-test-img-{Guid.NewGuid():N}");
         Factory = new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>
             {
                 builder.UseSetting("Metacache:DataPath", ":memory:");
+                builder.UseSetting("Metacache:Images:Directory", _imageDir);
                 builder.UseSetting("Metacache:Tmdb:ApiKey", "test-api-key");
+                builder.UseSetting("Metacache:Tmdb:Auth", "Bearer");
                 builder.ConfigureTestServices(services => services.AddSingleton<IUpstreamHttp>(Upstream));
             });
         Upstream.Route();
     }
 
-    public void Dispose() => Factory.Dispose();
+    public void Dispose()
+    {
+        Factory.Dispose();
+        if (Directory.Exists(_imageDir))
+            Directory.Delete(_imageDir, recursive: true);
+    }
 
     protected HttpClient Client => Factory.CreateClient();
 

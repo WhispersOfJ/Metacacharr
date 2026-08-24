@@ -198,6 +198,8 @@ public static class TmdbTestData
                 return Json(Find105Json);
             if (path.EndsWith("/find/tt999999", StringComparison.Ordinal))
                 return Json(EmptyFindJson);
+            if (path.StartsWith("/t/p/", StringComparison.Ordinal))
+                return new UpstreamResponse(200, TestBytes.Of("fake-jpeg-bytes"), "image/jpeg", null, null, null);
             throw new InvalidOperationException($"Unexpected upstream request: {request.Url}");
         };
 

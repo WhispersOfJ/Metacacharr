@@ -36,10 +36,14 @@ builder.Services.AddMetacacheMatching(builder.Configuration);
 // TMDB client (Bearer-auth header, so the API key never appears in URLs/cache keys)
 // and the provider services that answer Plex match/metadata requests (M1: movies).
 var tmdbSection = builder.Configuration.GetSection("Metacache:Tmdb");
+var tmdbAuth = Enum.TryParse<TmdbAuthMode>(tmdbSection["Auth"] ?? "Auto", ignoreCase: true, out var parsedAuth)
+    ? parsedAuth
+    : TmdbAuthMode.Auto;
 var tmdbOptions = new TmdbOptions(
     ApiKey: tmdbSection["ApiKey"] ?? "",
     BaseUrl: tmdbSection["BaseUrl"] ?? "https://api.themoviedb.org/3",
-    ImageBaseUrl: tmdbSection["ImageBaseUrl"] ?? "https://image.tmdb.org/t/p/original");
+    ImageBaseUrl: tmdbSection["ImageBaseUrl"] ?? "https://image.tmdb.org/t/p/original",
+    Auth: tmdbAuth);
 builder.Services.AddTmdbClient(tmdbOptions);
 builder.Services.AddMetacachePlexProviders();
 

@@ -15,12 +15,13 @@ public class TmdbClientTests
         public CacheStore Store { get; }
         public TmdbClient Client { get; }
 
-        public Fixture(string apiKey = "test-api-key")
+        public Fixture(string apiKey = "test-api-key", TmdbAuthMode auth = TmdbAuthMode.Bearer)
         {
             Store = new CacheStore(":memory:", Clock);
             var cache = new UpstreamCache(Store, Upstream, new SingleFlight(), Clock, NullLogger<UpstreamCache>.Instance);
             Client = new TmdbClient(
-                new TmdbOptions(ApiKey: apiKey, BaseUrl: TmdbTestData.BaseUrl), cache, NullLogger<TmdbClient>.Instance);
+                new TmdbOptions(ApiKey: apiKey, BaseUrl: TmdbTestData.BaseUrl, Auth: auth),
+                cache, NullLogger<TmdbClient>.Instance);
         }
 
         public void Dispose() => Store.Dispose();
@@ -144,6 +145,54 @@ public class TmdbClientTests
         await Assert.ThrowsAsync<TmdbConfigurationException>(
             () => f.Client.SearchMoviesAsync("Back to the Future", null, "en-US", includeAdult: false));
         Assert.Empty(f.Upstream.Requests); // fails before any network activity
+    }
+
+    [Fact]
+    public async Task Query_mode_puts_the_key_in_the_url_but_not_in_the_cache_key()
+    {
+        using var f = new Fixture(auth: TmdbAuthMode.Query);
+        f.Upstream.Handler = _ => Json(TmdbTestData.SearchJson);
+
+        await f.Client.SearchMoviesAsync("Back to the Future", 1985, "en-US", includeAdult: false);
+
+        UpstreamRequest request = Assert.Single(f.Upstream.Requests);
+        Assert.Contains("api_key=test-api-key", request.Url.Query);
+
+        // The stored cache row must be keyed by the secret-free URL, not the request URL,
+        // so the API key never lands in the cache DB.
+        string cleanUrl = request.Url.AbsoluteUri.Replace("&api_key=test-api-key", "");
+        CachedUpstreamRow? row = f.Store.GetUpstream(UpstreamCache.ComputeKey(cleanUrl));
+        Assert.NotNull(row);
+        Assert.Equal(UpstreamCache.ComputeKey(cleanUrl), row!.Key);
+        Assert.NotEqual(UpstreamCache.ComputeKey(request.Url.AbsoluteUri), row.Key);
+    }
+
+    [Fact]
+    public async Task Auto_mode_probes_and_falls_back_to_query_for_legacy_keys()
+    {
+        using var f = new Fixture(auth: TmdbAuthMode.Auto);
+        f.Upstream.Handler = request => request.Url.AbsolutePath.EndsWith("/authentication")
+            ? new UpstreamResponse(401, [], null, null, null, null)
+            : Json(TmdbTestData.SearchJson);
+
+        await f.Client.SearchMoviesAsync("Back to the Future", null, "en-US", includeAdult: false);
+
+        UpstreamRequest search = f.Upstream.Requests.Single(r => r.Url.AbsolutePath.EndsWith("/search/movie"));
+        Assert.Contains("api_key=test-api-key", search.Url.Query);
+        Assert.Contains("/authentication", f.Upstream.Requests[0].Url.AbsolutePath); // probe first
+    }
+
+    [Fact]
+    public async Task Auto_mode_uses_bearer_when_the_key_is_accepted()
+    {
+        using var f = new Fixture(auth: TmdbAuthMode.Auto);
+        f.Upstream.Handler = _ => Json(TmdbTestData.SearchJson);
+
+        await f.Client.SearchMoviesAsync("Back to the Future", null, "en-US", includeAdult: false);
+
+        UpstreamRequest search = f.Upstream.Requests.Single(r => r.Url.AbsolutePath.EndsWith("/search/movie"));
+        Assert.Equal("Bearer test-api-key", search.Headers!["Authorization"]);
+        Assert.False(search.Url.Query.Contains("api_key", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
