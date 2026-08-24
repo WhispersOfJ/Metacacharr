@@ -237,6 +237,25 @@ public class UpstreamCacheTests
     }
 
     [Fact]
+    public async Task Process_counters_track_hits_and_misses_for_metrics()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Ok("hello");
+
+        Assert.Equal(0, f.Cache.GetCounters().Requests);
+
+        await f.Cache.GetOrFetchAsync(Url, Hour()); // miss
+        await f.Cache.GetOrFetchAsync(Url, Hour()); // hit
+        await f.Cache.GetOrFetchAsync(Url, Hour()); // hit
+
+        CacheCounters counters = f.Cache.GetCounters();
+        Assert.Equal(3, counters.Requests);
+        Assert.Equal(2, counters.Hits);
+        Assert.Equal(1, counters.Misses);
+        Assert.Equal(2.0 / 3.0, counters.HitRate, precision: 3);
+    }
+
+    [Fact]
     public async Task Not_found_is_passed_through_and_not_cached()
     {
         using var f = new Fixture();

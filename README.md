@@ -7,7 +7,7 @@ HTTP metadata server.
 
 See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
 
-## Status: M0–M2 shipped
+## Status: M0–M3 shipped
 
 - `GET /movie` and `GET /tv` serve the MediaProvider definitions Plex needs to register
   the providers ("Add Provider").
@@ -33,8 +33,15 @@ See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
 - **Cache core** (DESIGN.md §7): SQLite store (`upstream_cache` / `items` / `urls`),
   keyed single-flight dedupe, ETag revalidation, TTL expiry, stale-if-error serving,
   and per-request header forwarding (used for TMDB Bearer auth) — fully unit-tested.
+- **Cache warming (M3):** `POST /warm/movies` (Radarr), `/warm/shows` (Sonarr), and
+  `/warm/all` turn the ARR libraries into the cache inventory — every movie/show/
+  season/episode is fetched through the cached provider services and its artwork is
+  pulled into the local image cache, with concurrency limits and a status endpoint.
+- **Metrics dashboard (M3):** `GET /metrics` reports cache hit rate (live request
+  counters), per-kind item counts, upstream-cache size, and disk usage (image files
+  + SQLite DB).
 
-Cache warming (M3) and the ARR proxy face (M4) are next — see DESIGN.md §12.
+The ARR proxy face (M4) is next — see DESIGN.md §12.
 
 ## Requirements
 
@@ -59,6 +66,9 @@ dotnet run --project src/Metacache.Host
 | `Metacache__Tmdb__ApiKey` | *(none)* | **Required for M1.** Your TMDB API Read Access Token **or** legacy v3 API key. With `Auth=Bearer`/`Auto` the key never appears in URLs, cache keys, or logs. Get one at themoviedb.org → Settings → API |
 | `Metacache__Tmdb__Auth` | `Auto` | `Auto` probes once and picks `Bearer` (API Read Access Token) or `Query` (legacy v3 key); force either with `Bearer`/`Query`. In `Query` mode the cache key is still computed from the secret-free URL |
 | `Metacache__Tmdb__BaseUrl` / `ImageBaseUrl` | TMDB v3 / `t/p/original` | Upstream endpoints (override for proxies) |
+| `Metacache__Arr__RadarrUrl` / `RadarrApiKey` | *(none)* | Radarr instance + API key for `/warm/movies` (blank URL disables the source) |
+| `Metacache__Arr__SonarrUrl` / `SonarrApiKey` | *(none)* | Sonarr instance + API key for `/warm/shows` (blank URL disables the source) |
+| `Metacache__Arr__Concurrency` | `4` | How many items a warm run processes in parallel |
 
 Env vars override `appsettings.json`, e.g.:
 
@@ -83,6 +93,9 @@ docker run -d --name metacache --network host metacache
 | `GET /library/metadata/{ratingKey}/children` | Seasons of a show / episodes of a season, paged |
 | `GET /library/metadata/{ratingKey}/grandchildren` | All episodes of a show, paged |
 | `GET /library/metadata/{ratingKey}/images` | All image assets for the item |
+| `POST /warm/movies` / `/warm/shows` / `/warm/all` | Pre-populate the cache from Radarr/Sonarr; returns the run summary (or 409 while another warm is running) |
+| `GET /warm/status` | Live warmer state: `{ isRunning, lastResult }` |
+| `GET /metrics` | Cache hit rate, per-kind item counts, upstream size, disk usage |
 
 Localization via the `X-Plex-Language` header (or query param) is passed through to
 TMDB and used for the match language tiebreak; `X-Plex-Country` picks the content
@@ -116,7 +129,7 @@ src/Metacache.Core/Providers/  TMDB client (search/find/details through the cach
 src/Metacache.Core/Matching/   match scoring, title normalization, filename parsing
 src/Metacache.Plex/            Plex provider API: wire models, catalog, rating keys,
                                match parser, movie + TV provider services, mappers,
-                               endpoints
+                               cache warmer, endpoints
 src/Metacache.Host/            ASP.NET Core host, config, logging
 tests/Metacache.Host.Tests/    integration + unit tests (provider API, cache core, matching)
 ```

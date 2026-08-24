@@ -36,6 +36,28 @@ public sealed partial class ImageStore
 
     public bool Exists(string hash) => IsValidHash(hash) && File.Exists(GetFilePath(hash));
 
+    /// <summary>Total bytes on disk and file count (for /metrics disk usage).</summary>
+    public (int Files, long Bytes) DiskUsage()
+    {
+        if (!Directory.Exists(_root))
+            return (0, 0);
+        long bytes = 0;
+        int files = 0;
+        foreach (string file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+        {
+            try
+            {
+                bytes += new FileInfo(file).Length;
+                files++;
+            }
+            catch (IOException)
+            {
+                // File vanished mid-walk (eviction) — skip.
+            }
+        }
+        return (files, bytes);
+    }
+
     /// <summary>Writes the image, enforcing the per-file cap. Returns the stored path.</summary>
     public string Store(string hash, byte[] body)
     {

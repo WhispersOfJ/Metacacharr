@@ -21,6 +21,8 @@ public sealed class UpstreamCache
     private readonly SingleFlight _flight;
     private readonly IClock _clock;
     private readonly ILogger<UpstreamCache> _logger;
+    private long _requests;
+    private long _hits;
 
     public UpstreamCache(
         CacheStore store,
@@ -56,6 +58,7 @@ public sealed class UpstreamCache
         // TMDB's legacy api_key query param) compute the key from the secret-free URL
         // so keys and the DB never contain credentials.
         string key = cacheKey ?? ComputeKey(url);
+        Interlocked.Increment(ref _requests);
         Task<CachedResponse> task = _flight.RunAsync(key, () => FetchCoreAsync(key, url, policy, headers));
         return await task.ConfigureAwait(false);
     }
@@ -68,6 +71,7 @@ public sealed class UpstreamCache
         if (cached is not null && cached.ExpiresAt > now)
         {
             _store.BumpHits(key);
+            Interlocked.Increment(ref _hits);
             return cached.ToResponse(CacheSource.Cache);
         }
 
@@ -147,6 +151,11 @@ public sealed class UpstreamCache
 
         _logger.LogWarning(error, "Serving stale cache entry for {Url} (fetched {FetchedAt})", cached.Url, cached.FetchedAt);
         _store.BumpHits(cached.Key);
+        Interlocked.Increment(ref _hits);
         return cached.ToResponse(CacheSource.Stale);
     }
+
+    /// <summary>Live hit/miss counters for /metrics (served-from-cache counts as a hit).</summary>
+    public CacheCounters GetCounters() =>
+        new(Interlocked.Read(ref _requests), Interlocked.Read(ref _hits));
 }

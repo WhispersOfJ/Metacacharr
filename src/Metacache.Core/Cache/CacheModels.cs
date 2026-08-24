@@ -61,3 +61,12 @@ public sealed record CachedUrl(
     DateTimeOffset FetchedAt);
 
 public sealed record CacheStats(int UpstreamEntries, long UpstreamBytes, int ItemEntries, int UrlEntries);
+
+/// <summary>Process-lifetime request counters for the hit-rate metric (M3 /metrics).</summary>
+public sealed record CacheCounters(long Requests, long Hits)
+{
+    /// <summary>0 when nothing has been served yet.</summary>
+    public double HitRate => Requests == 0 ? 0 : (double)Hits / Requests;
+
+    public long Misses => Requests - Hits;
+}

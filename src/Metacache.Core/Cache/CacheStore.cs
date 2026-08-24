@@ -326,6 +326,21 @@ public sealed class CacheStore : IDisposable
         }
     }
 
+    /// <summary>Item counts by kind (movie/show/season/episode) for the /metrics dashboard.</summary>
+    public IReadOnlyDictionary<string, int> CountItemsByKind()
+    {
+        lock (_gate)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT kind, COUNT(*) FROM items GROUP BY kind;";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                counts[reader.GetString(0)] = reader.GetInt32(1);
+            return counts;
+        }
+    }
+
     public CacheStats GetStats()
     {
         lock (_gate)

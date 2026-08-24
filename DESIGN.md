@@ -320,8 +320,8 @@ when the URL is known but the file is missing, and 404s for unknown/invalid hash
 
 ## 8. Cache warming (the "companion" part)
 
-The cache is most valuable when it's *already full* before Plex asks. Warm it from the
-ARR apps themselves:
+**Shipped as M3 (§18).** The cache is most valuable when it's *already full* before
+Plex asks. Warm it from the ARR apps themselves:
 
 - **Radarr:** `GET /api/v3/movie` (API key via header) → tmdbIds of everything in your
   movie library → prefetch movie metadata + images + collections.
@@ -441,6 +441,7 @@ Plex changes the API (it will — it's brand new), you change one folder.
 - **M3 — Companion features:** Sonarr/Radarr warm-up jobs; metrics + dashboard
   (hit rate, per-provider counts, disk usage); manual purge + TTL tuning; stale-if-error
   offline mode. *DoD:* unplug the WAN and a full library refresh still completes.
+  **Shipped** — see §18 (dashboard UI and the remaining tuning knobs still to come).
 - **M4 — ARR proxy face:** transparent caching reverse proxy for
   `api.themoviedb.org`/`image.tmdb.org`/`api.thetvdb.com`/`webservice.fanart.tv` with
   DNS override (§10); local CA + per-hostname certs; multi-language warm; music
@@ -682,3 +683,41 @@ index and by air date, `/children` + `/grandchildren` paging (default 20, header
 overrides), complete `Guid[]` (tmdb+imdb+tvdb) and cast/crew with rewritten `/img`
 thumbs, country-aware content rating, real poster fetch through `/img`, and repeat
 matches adding zero upstream calls.
+
+---
+
+## 18. M3 — cache warming + metrics shipped (implementation notes)
+
+M3 turns the ARR apps' libraries into the cache inventory and adds the metrics
+surface. Notes on the choices made:
+
+**The warmer reuses the provider services.** `CacheWarmer` (Metacache.Plex/Warming)
+calls `MovieProviderService.GetMovieMetadataAsync` / `TvProviderService.GetShowMetadataAsync`
+for each library item, so every fetch flows through the normal cached gateway (TTL,
+single-flight, ETag) and artwork registration — the warm is literally a headless
+Plex refresh. A Radarr movie costs the details+credits+release-dates calls; a Sonarr
+series resolves its tvdbId via the find endpoint, then fetches the show, every
+season, and every episode, pulling show/season posters and episode stills through the
+image cache. All of it is cached, so the next real refresh is a cache hit.
+
+**ARR API keys ride in headers.** `ArrClient` queries `/api/v3/movie` and
+`/api/v3/series` with `X-Api-Key`, so keys never appear in URLs or logs. These calls
+are deliberately NOT routed through the upstream cache — the ARR APIs are the
+inventory source, change constantly, and are queried on demand.
+
+**The warmer writes `items` rows.** Every warmed movie/show/season/episode gets a row
+in the normalized store (kind/source/source-id), which finally exercises the `items`
+table (§7.4) and feeds the per-kind counts. `POST /warm/movies|shows|all` runs with
+bounded concurrency (`Metacache:Arr:Concurrency`, default 4), returns a run summary,
+and 409s while another run is in flight; `GET /warm/status` exposes the live state.
+
+**Hit rate is a process counter, not a query.** `UpstreamCache` now increments
+Interlocked request/hit counters (served-from-cache counts as a hit, including
+stale-if-error), so `GET /metrics` reports a live hit rate without scanning the DB.
+The endpoint also reports upstream-cache entries/bytes, per-kind item counts, image
+files/bytes on disk, and the SQLite file size (`null` for `:memory:`).
+
+**Deferred to M4+:** the scheduled (nightly) warm, event-driven warming on ARR
+webhooks, a dashboard UI, trending/popular search warm-up, and the remaining M3
+tuning knobs (manual TTL tuning). `items` rows are written by the warmer only —
+provider-served lookups don't yet record rows, so per-kind counts reflect warm runs.

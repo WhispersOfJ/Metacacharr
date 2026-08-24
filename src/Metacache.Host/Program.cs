@@ -47,6 +47,17 @@ var tmdbOptions = new TmdbOptions(
 builder.Services.AddTmdbClient(tmdbOptions);
 builder.Services.AddMetacachePlexProviders();
 
+// M3 cache warming: Radarr/Sonarr become the inventory (DESIGN.md §8). A blank URL
+// disables that source; the /warm/* endpoints and /metrics dashboard are mapped below.
+var arrSection = builder.Configuration.GetSection("Metacache:Arr");
+var arrOptions = new ArrOptions(
+    RadarrUrl: arrSection["RadarrUrl"] ?? "",
+    RadarrApiKey: arrSection["RadarrApiKey"] ?? "",
+    SonarrUrl: arrSection["SonarrUrl"] ?? "",
+    SonarrApiKey: arrSection["SonarrApiKey"] ?? "",
+    Concurrency: arrSection.GetValue<int?>("Concurrency") ?? 4);
+builder.Services.AddMetacacheWarming(arrOptions);
+
 builder.Services.AddHttpLogging(o =>
 {
     o.LoggingFields = HttpLoggingFields.RequestPath
@@ -60,6 +71,8 @@ app.UseHttpLogging();
 app.MapProviderEndpoints();
 app.MapCacheAdminEndpoints();
 app.MapImageEndpoints();
+app.MapWarmEndpoints();
+app.MapMetricsEndpoints();
 app.MapGet("/healthz", () => Results.Text("ok", "text/plain"));
 
 app.Run();

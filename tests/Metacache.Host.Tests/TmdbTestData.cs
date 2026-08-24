@@ -346,12 +346,35 @@ public static class TmdbTestData
         }
         """;
 
-    /// <summary>Routes the canned responses by path; throws on anything unexpected.</summary>
-    public static void Route(this FakeUpstream upstream, string baseUrl = BaseUrl)
+    // ---- ARR (M3 warming) ----
+
+    public const string RadarrMoviesJson = """
+        [
+          { "id": 1, "title": "Back to the Future", "tmdbId": 105, "year": 1985 },
+          { "id": 2, "title": "Back to the Future Part II", "tmdbId": 165, "year": 1989 }
+        ]
+        """;
+
+    public const string SonarrSeriesJson = """
+        [
+          { "id": 1, "title": "Adventure Time", "tvdbId": 152831, "year": 2010 }
+        ]
+        """;
+
+    /// <summary>
+    /// Routes the canned responses by path; throws on anything unexpected. When
+    /// arrMovies/arrSeries are supplied, /api/v3/movie and /api/v3/series are served
+    /// for the M3 warmer tests.
+    /// </summary>
+    public static void Route(this FakeUpstream upstream, string baseUrl = BaseUrl, string? arrMovies = null, string? arrSeries = null)
     {
         upstream.Handler = request =>
         {
             string path = request.Url.AbsolutePath;
+            if (arrMovies is not null && path.EndsWith("/api/v3/movie", StringComparison.Ordinal))
+                return Json(arrMovies);
+            if (arrSeries is not null && path.EndsWith("/api/v3/series", StringComparison.Ordinal))
+                return Json(arrSeries);
             if (path.EndsWith("/search/movie", StringComparison.Ordinal))
                 return Json(request.Url.Query.Contains("query=Explicit", StringComparison.Ordinal) ? AdultSearchJson : SearchJson);
             if (path.EndsWith("/search/tv", StringComparison.Ordinal))
@@ -380,6 +403,10 @@ public static class TmdbTestData
                 return JsonStatus(404, """{ "status_code": 34 }""");
             if (path.EndsWith("/movie/999999999", StringComparison.Ordinal))
                 return JsonStatus(404, """{ "status_code": 34, "status_message": "The resource you requested could not be found." }""");
+            if (path.EndsWith("/movie/165/credits", StringComparison.Ordinal))
+                return Json(MovieCreditsJson);
+            if (path.EndsWith("/movie/165/release_dates", StringComparison.Ordinal))
+                return Json(ReleaseDatesJson);
             if (path.EndsWith("/movie/165", StringComparison.Ordinal))
                 return Json(Movie165Json);
             if (path.EndsWith("/movie/999", StringComparison.Ordinal))
@@ -389,6 +416,8 @@ public static class TmdbTestData
             if (path.EndsWith("/find/tt0088763", StringComparison.Ordinal))
                 return Json(Find105Json);
             if (path.EndsWith("/find/tt1305826", StringComparison.Ordinal))
+                return Json(FindTvJson);
+            if (path.EndsWith("/find/152831", StringComparison.Ordinal))
                 return Json(FindTvJson);
             if (path.EndsWith("/find/tt999999", StringComparison.Ordinal))
                 return Json(EmptyFindJson);

@@ -14,6 +14,7 @@ public static class CacheServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(options);
 
+        services.AddSingleton(options); // resolvable by /metrics for disk usage
         services.AddSingleton<IClock>(SystemClock.Instance);
         services.AddSingleton<SingleFlight>();
         services.AddSingleton(_ => new CacheStore(options.DataSource));
