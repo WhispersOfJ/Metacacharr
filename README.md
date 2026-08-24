@@ -12,6 +12,8 @@ See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
 - `GET /movie` and `GET /tv` serve the MediaProvider definitions Plex needs to register
   the providers ("Add Provider").
 - `GET /healthz` liveness check.
+- Admin surface: `GET /cache/stats` (cache sizes) and `POST /cache/purge` (expired-row
+  cleanup), returning `{ "removed": n }`.
 - Rating-key and GUID utilities with tests.
 - **Cache core** (DESIGN.md §7): SQLite store (`upstream_cache` / `items` / `urls`),
   keyed single-flight dedupe, ETag revalidation, TTL expiry, and stale-if-error
