@@ -27,6 +27,8 @@ services:
       - Metacache__Arr__SonarrApiKey=${SONARR_APIKEY:-}
     volumes:
       # SQLite DB + artwork live in /app/data (defaults in appsettings.json).
+      # The image runs non-root (APP_UID=1654): if this volume was created by an older
+      # root-running container, fix ownership once: docker run --rm -v metacache-data:/data alpine chown -R 1654:1654 /data
       - metacache-data:/app/data
     ports:
       - "${METACACHE_PORT:-8765}:8765" # provider API for Plex

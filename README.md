@@ -1,5 +1,8 @@
 # Metacache
 
+[![CI](https://github.com/WhispersOfJ/Metacacharr/actions/workflows/ci.yml/badge.svg)](https://github.com/WhispersOfJ/Metacacharr/actions/workflows/ci.yml)
+[![Docker](https://github.com/WhispersOfJ/Metacacharr/actions/workflows/docker.yml/badge.svg)](https://github.com/WhispersOfJ/Metacacharr/actions/workflows/docker.yml)
+
 An ARR-app companion that caches movie/TV metadata locally so Plex refreshes from a
 fast local server instead of hammering TMDB/TVDB over the internet. Implements Plex's
 **Custom Metadata Provider** API (PMS 1.43+), which natively lets you point Plex at any
@@ -114,6 +117,32 @@ docker compose -f monitoring/docker-compose.yml up -d --build
 The dashboard overlays the same metrics as the built-in page (hit rate, latency
 p50/p95 per provider, items by kind, warm status, disk usage, rate-limited
 responses); alerts fire through the rules in `monitoring/metacache-alerts.yml`.
+
+## CI/CD
+
+`.github/workflows/` ships two pipelines:
+
+- **CI** (`ci.yml`) — every push/PR: restore (cached), `dotnet format` as a C# style
+gate, Release build with **warnings as errors**, xUnit run with coverage artifact, and
+`dotnet list package --vulnerable` as a **NuGet CVE gate** (fails on any direct or
+transitive package with a known vulnerability).
+- **Docker** (`docker.yml`) — builds the image (BuildKit cache), pushes to
+`ghcr.io/whispersofj/metacacharr` on `main` and `v*` tags, and gates every run on
+**Trivy CVE scans**: the image (HIGH/CRITICAL, fixable only) and IaC config
+(Dockerfile/compose misconfigs, e.g. non-root USER). SARIF findings upload to GitHub
+code scanning. A **nightly schedule** rebuilds against the latest patched base images
+and re-scans, so base-image CVEs surface without waiting for a code change. Trivy runs
+as the official `aquasec/trivy` image — the `aquasec/trivy-action` GitHub Action was
+supply-chain compromised in 2026 (CVE-2026-26189 + tag force-push), so it is not used.
+
+The image runs as a **non-root user** (`APP_UID`, container-escape hardening). If you
+upgraded an existing deployment, its named volume was created by the old root-running
+container — fix ownership once before rebuilding:
+
+```bash
+docker run --rm -v metacache-data:/data alpine chown -R 1654:1654 /data
+# (verify the volume name with: docker volume ls | grep metacache)
+```
 
 ## Provider endpoints
 
