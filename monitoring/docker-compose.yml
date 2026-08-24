@@ -42,7 +42,9 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:v2.55.1
+    # v2.55.1 had 48 HIGH/CRITICAL CVEs; v3.14.0 is current and clean except
+    # vendor-side fixes tracked in .trivyignore (the nightly CI scan gates this).
+    image: prom/prometheus:v3.14.0
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -58,7 +60,9 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.3.0
+    # 11.3.0 had 85 HIGH/CRITICAL CVEs; 13.0.7 is current — remaining findings
+    # are vendor-side (Go stdlib etc.) and tracked in .trivyignore (CI gates this).
+    image: grafana/grafana:13.0.7
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false

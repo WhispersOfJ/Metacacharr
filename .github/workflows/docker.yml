@@ -64,7 +64,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }},metacache:ci
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Cache writes need a write token — PRs (incl. Dependabot's read-only
+          # token) restore from the cache but don't write; pushes/schedule do.
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
 
       - name: Cache Trivy vulnerability DB
         uses: actions/cache@v4
@@ -103,14 +105,59 @@ jobs:
             --exit-code 1 \
             .
 
+      - name: Trivy — pinned monitoring images scan (gate)
+        # Scans every third-party image pinned in monitoring/docker-compose.yml
+        # (the metacache service has no image: — it builds). Dependabot bumps
+        # these pins, so every PR re-scans the proposed version against the
+        # .trivyignore accept-list; the nightly schedule re-scans the pinned
+        # versions for newly disclosed CVEs. All images are scanned even if one
+        # fails, so the SARIF for each is still uploaded; the step then exits 1.
+        run: |
+          set -euo pipefail
+          images=$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(.*\)$/\1/p' monitoring/docker-compose.yml | tr -d '"' | sed 's/[[:space:]]*$//')
+          if [ -z "$images" ]; then
+            echo "no pinned images found in monitoring/docker-compose.yml"
+            exit 0
+          fi
+          mkdir -p sarif
+          failed=0
+          for img in $images; do
+            name=$(printf '%s' "$img" | tr '/:' '__')
+            echo "=== Trivy $img ==="
+            if ! docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "${{ github.workspace }}:/scan" \
+              -v "${{ github.workspace }}/trivy-cache:/root/.cache" \
+              -w /scan \
+              aquasec/trivy:0.57.1 image \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --ignorefile /scan/.trivyignore \
+              --format sarif \
+              --output "/scan/sarif/$name.sarif" \
+              --exit-code 1 \
+              "$img"; then
+              failed=1
+            fi
+          done
+          exit $failed
+
       - name: Upload Trivy SARIF (image)
-        if: always()
+        # Dependabot PRs run with a read-only token (no security-events write), so
+        # SARIF upload would 403 — skip it there; the Trivy gates above still run.
+        if: always() && github.actor != 'dependabot[bot]'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image.sarif
 
       - name: Upload Trivy SARIF (config)
-        if: always()
+        if: always() && github.actor != 'dependabot[bot]'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-config.sarif
+
+      - name: Upload Trivy SARIF (monitoring images)
+        if: always() && github.actor != 'dependabot[bot]'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sarif # directory of per-image SARIF files

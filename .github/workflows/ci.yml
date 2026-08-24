@@ -42,8 +42,10 @@ jobs:
         run: dotnet test Metacache.slnx -c Release --no-build --collect:"XPlat Code Coverage" --results-directory TestResults
 
       - name: Upload coverage artifact
+        # Dependabot PRs run with a read-only token, so artifact upload would 403 —
+        # skip it there; every gate above still runs on those PRs.
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && github.actor != 'dependabot[bot]'
         with:
           name: coverage
           path: TestResults

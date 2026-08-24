@@ -1,0 +1,53 @@
+# Dependabot version updates. Security updates are enabled automatically by
+# GitHub for supported ecosystems and do not need a config entry.
+#
+# Every PR Dependabot opens runs the repo's CI gates: ci.yml (build, tests,
+# format, NuGet CVE audit) and docker.yml (image build + Trivy CVE scans), so a
+# dependency bump that breaks the build or pulls in HIGH/CRITICAL CVEs fails the
+# check before it can be merged.
+
+version: 2
+updates:
+  # NuGet packages — all .csproj files under src/ and tests/.
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "dotnet"]
+    groups:
+      # The whole test toolchain in one PR (it is the only direct NuGet surface).
+      test-toolchain:
+        patterns:
+          - "Microsoft.NET.Test.Sdk"
+          - "xunit*"
+          - "coverlet*"
+          - "Microsoft.AspNetCore.Mvc.Testing"
+          - "Microsoft.Extensions.TimeProvider.Testing"
+
+  # Docker base image — the Dockerfile at the repo root.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]
+
+  # Docker images pinned in the monitoring compose stack (Prometheus, Grafana).
+  # Directory must point at the compose file's folder (Dependabot only looks in
+  # the specified directory, not recursively).
+  - package-ecosystem: "docker"
+    directory: "/monitoring"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]

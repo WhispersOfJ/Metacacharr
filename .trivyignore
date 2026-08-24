@@ -1,0 +1,33 @@
+# Accepted-risk list for the Trivy image scans (docker.yml). Every entry here is a
+# vendor-side CVE: the fix exists upstream but is not yet in a published image for
+# the pinned version. When a patched release lands, Dependabot bumps the pin in
+# monitoring/docker-compose.yml and these entries fall out of the scan. Each entry
+# carries an expiry (exp:) — if it passes while the finding is still present, the
+# CI gate turns red on purpose and the pin gets re-reviewed.
+#
+# Targets: prom/prometheus:v3.14.0, grafana/grafana:13.0.7 (latest stable at pin
+# time 2026-08-24).
+
+# Prometheus v3.14.0: vendored prometheus module — fix 0.311.3 not yet released.
+CVE-2026-42154 exp:2027-02-28
+
+# Grafana 13.0.7 — Go stdlib, fixes pending a Grafana rebuild (go 1.26.4-1.26.6).
+CVE-2026-27145 exp:2027-02-28
+CVE-2026-33818 exp:2027-02-28
+CVE-2026-39821 exp:2027-02-28
+CVE-2026-39822 exp:2027-02-28
+CVE-2026-42504 exp:2027-02-28
+CVE-2026-46600 exp:2027-02-28
+CVE-2026-56853 exp:2027-02-28
+CVE-2026-56858 exp:2027-02-28
+CVE-2026-56859 exp:2027-02-28
+CVE-2026-56860 exp:2027-02-28
+CVE-2026-56862 exp:2027-02-28
+
+# Grafana 13.0.7 — vendored kin-openapi / tempo / prometheus modules.
+GHSA-r277-6w6q-xmqw exp:2027-02-28
+CVE-2026-76905 exp:2027-02-28
+CVE-2026-77354 exp:2027-02-28
+CVE-2026-21728 exp:2027-02-28
+CVE-2026-28377 exp:2027-02-28
+CVE-2026-42151 exp:2027-02-28
