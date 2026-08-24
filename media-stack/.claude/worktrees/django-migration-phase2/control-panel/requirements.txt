@@ -1,0 +1,10 @@
+fastapi==0.141.1
+uvicorn==0.52.4
+docker==7.2.0
+httpx==0.28.1
+pyyaml==6.0.3
+sqlalchemy==2.0.52
+alembic==1.19.1
+argon2-cffi==25.1.0
+itsdangerous==2.2.0
+pillow==12.3.0

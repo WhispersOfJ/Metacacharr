@@ -1,0 +1,75 @@
+using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using Metacache.Core.Cache;
+using Metacache.Host.Tests.Cache;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Metacache.Host.Tests;
+
+/// <summary>
+/// Boots the real host with an in-memory cache and the fake TMDB upstream, so the
+/// match/metadata/image endpoints are exercised end to end (DI wiring included).
+/// </summary>
+public abstract class ProviderEndpointTestBase : IDisposable
+{
+    protected readonly FakeUpstream Upstream = new();
+    protected readonly WebApplicationFactory<Program> Factory;
+    private readonly string _imageDir;
+
+    protected ProviderEndpointTestBase()
+    {
+        // Isolated per-factory image dir (like the :memory: DB) so tests never see
+        // files left by an earlier run.
+        _imageDir = Path.Combine(Path.GetTempPath(), $"metacache-test-img-{Guid.NewGuid():N}");
+        Factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseSetting("Metacache:DataPath", ":memory:");
+                builder.UseSetting("Metacache:Images:Directory", _imageDir);
+                builder.UseSetting("Metacache:Tmdb:ApiKey", "test-api-key");
+                builder.UseSetting("Metacache:Tmdb:Auth", "Bearer");
+                builder.UseSetting("Metacache:Tvdb:ApiKey", "test-tvdb-key");
+                builder.ConfigureTestServices(services =>
+                {
+                    services.AddSingleton<IUpstreamHttp>(Upstream);
+                    // TvdbClient's login POST is the only raw-HttpClient traffic (all data
+                    // calls route through the fake upstream); never let tests hit the real API.
+                    services.AddSingleton(_ => new HttpClient(new TestTvdbLoginHandler()));
+                });
+            });
+        Upstream.Route();
+    }
+
+    public void Dispose()
+    {
+        Factory.Dispose();
+        if (Directory.Exists(_imageDir))
+            Directory.Delete(_imageDir, recursive: true);
+    }
+
+    protected HttpClient Client => Factory.CreateClient();
+
+    /// <summary>Case-sensitive, like the provider's own serializer (Plex schema has guid/Guid).</summary>
+    protected static readonly JsonSerializerOptions TestJsonOptions =
+        new(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = false };
+
+    protected static async Task<T?> ReadProviderAsync<T>(HttpResponseMessage response) =>
+        await response.Content.ReadFromJsonAsync<T>(TestJsonOptions);
+
+    protected static StringContent JsonBody(string json) => new(json, Encoding.UTF8, "application/json");
+
+    /// <summary>Answers TVDB /v4/login POSTs with a fixed token so tests never hit the real API.</summary>
+    private sealed class TestTvdbLoginHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(TmdbTestData.TvdbLoginJson, Encoding.UTF8, "application/json")
+            });
+    }
+}

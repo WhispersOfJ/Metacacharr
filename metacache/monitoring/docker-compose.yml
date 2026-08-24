@@ -1,0 +1,84 @@
+# Metacache monitoring stack: the host, Prometheus (scraping /metrics/prometheus with
+# the alerting rules loaded), and a pre-wired Grafana (datasource + dashboard auto-
+# provisioned). Bring it up from the repo root:
+#
+#   cp monitoring/.env.example monitoring/.env   # then fill in METACACHE_TMDB_APIKEY
+#   docker compose -f monitoring/docker-compose.yml up -d --build
+#
+# Then open http://localhost:3000 (admin / $GRAFANA_ADMIN_PASSWORD), where the
+# "Metacache" dashboard is already loaded against the Prometheus datasource.
+
+services:
+  metacache:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      # Plex reaches the provider API on the LAN; Prometheus scrapes it on the network.
+      - Metacache__BindAddress=0.0.0.0
+      - Metacache__Port=8765
+      - Metacache__Tmdb__ApiKey=${METACACHE_TMDB_APIKEY:?set METACACHE_TMDB_APIKEY in monitoring/.env}
+      - Metacache__Tmdb__Auth=Bearer
+      # TVDB v4 key — episode fallback/augmentation when TMDB lacks episodes.
+      - Metacache__Tvdb__ApiKey=${METACACHE_TVDB_APIKEY:-}
+      - Metacache__Arr__RadarrUrl=${RADARR_URL:-}
+      - Metacache__Arr__RadarrApiKey=${RADARR_APIKEY:-}
+      - Metacache__Arr__SonarrUrl=${SONARR_URL:-}
+      - Metacache__Arr__SonarrApiKey=${SONARR_APIKEY:-}
+    volumes:
+      # SQLite DB + artwork live in /app/data (defaults in appsettings.json).
+      # The image runs non-root (APP_UID=1654): if this volume was created by an older
+      # root-running container, fix ownership once: docker run --rm -v metacache-data:/data alpine chown -R 1654:1654 /data
+      - metacache-data:/app/data
+    ports:
+      - "${METACACHE_PORT:-8765}:8765" # provider API for Plex
+    healthcheck:
+      # CMD-SHELL runs under /bin/sh (dash), which lacks /dev/tcp — invoke bash explicitly.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8765'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  prometheus:
+    # v2.55.1 had 48 HIGH/CRITICAL CVEs; v3.14.0 is current and clean except
+    # vendor-side fixes tracked in .trivyignore (the nightly CI scan gates this).
+    image: prom/prometheus:v3.14.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./metacache-alerts.yml:/etc/prometheus/rules/metacache-alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      metacache:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    # 11.3.0 had 85 HIGH/CRITICAL CVEs; 13.0.7 is current — remaining findings
+    # are vendor-side (Go stdlib etc.) and tracked in .trivyignore (CI gates this).
+    image: grafana/grafana:13.0.7
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/metacache.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  metacache-data:
+  prometheus-data:
+  grafana-data:

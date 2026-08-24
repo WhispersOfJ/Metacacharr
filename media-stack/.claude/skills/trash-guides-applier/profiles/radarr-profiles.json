@@ -1,0 +1,143 @@
+{
+  "quality_profiles": [
+    {
+      "name": "HD Bluray + WEB",
+      "upgrade_allowed": true,
+      "cutoff": "Bluray-1080p",
+      "items": [
+        "WEBDL-1080p",
+        "WEBRip-1080p",
+        "Bluray-1080p",
+        "Remux-1080p"
+      ],
+      "min_format_score": 0,
+      "cutoff_format_score": 10000
+    },
+    {
+      "name": "Remux + WEB 2160p",
+      "upgrade_allowed": true,
+      "cutoff": "Remux-2160p",
+      "items": [
+        "WEBDL-2160p",
+        "WEBRip-2160p",
+        "Bluray-2160p",
+        "Remux-2160p"
+      ],
+      "min_format_score": 0,
+      "cutoff_format_score": 10000
+    }
+  ],
+  "custom_formats": [
+    {
+      "name": "HDR10+",
+      "score": 30,
+      "note": "TRaSH-Guides trash_id 493b6d1dbec3c3364c59d7607f7e3405 (HDR group), HDR10+ spec only. Previously a placeholder {type,value} shape that Radarr's API rejects (400: condition name(s) cannot be empty) - replaced with the real ReleaseTitleSpecification regex from config/recyclarr's vendored TRaSH-Guides JSON.",
+      "specifications": [
+        {"name": "HDR10+", "implementation": "ReleaseTitleSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "\\b(HDR10(?=[+]|P(lus)?))"}]}
+      ]
+    },
+    {
+      "name": "Dolby Vision",
+      "score": 40,
+      "note": "TRaSH-Guides trash_id b337d6812e06c200ec9a2d3cfa9d20a7 (DV Boost). Previously a placeholder {type,value} shape - replaced with the real ReleaseTitleSpecification regex.",
+      "specifications": [
+        {"name": "DV", "implementation": "ReleaseTitleSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "\\b(dv|dovi|dolby[ .]?v(ision)?)\\b"}]}
+      ]
+    },
+    {
+      "name": "Remux Tier 01",
+      "score": 25,
+      "note": "TRaSH-Guides trash_id 3a3ff47579026e76d6504ebea39390de, full release-group list. Previously a placeholder {type,value} shape matching only FraMeSToR - replaced with the real QualityModifierSpecification + full ReleaseGroupSpecification set.",
+      "specifications": [
+        {"name": "Remux", "implementation": "QualityModifierSpecification", "negate": false, "required": true, "fields": [{"name": "value", "value": 5}]},
+        {"name": "3L", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(3L)$"}]},
+        {"name": "BiZKiT", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(BiZKiT)$"}]},
+        {"name": "BLURANiUM", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(BLURANiUM)$"}]},
+        {"name": "BMF", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(BMF)$"}]},
+        {"name": "CiNEPHiLES", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(CiNEPHiLES)$"}]},
+        {"name": "FraMeSToR", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(FraMeSToR)$"}]},
+        {"name": "PiRAMiDHEAD", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(PiRAMiDHEAD)$"}]},
+        {"name": "PmP", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(PmP)$"}]},
+        {"name": "WiLDCAT", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(WiLDCAT)$"}]},
+        {"name": "ZQ", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(ZQ)$"}]}
+      ]
+    },
+    {
+      "name": "x265 (no HDR/DV)",
+      "score": -1000,
+      "note": "TRaSH-Guides trash_id 839bea857ed2c0a8e084f3cbdbd65ecb. Previously a placeholder {type,value} shape referencing a non-existent 'codec'/'hdr' spec type - Radarr has no such implementations (confirmed against /api/v3/customformat/schema). Replaced with the real ReleaseTitleSpecification/ResolutionSpecification combination.",
+      "specifications": [
+        {"name": "x265/HEVC", "implementation": "ReleaseTitleSpecification", "negate": false, "required": true, "fields": [{"name": "value", "value": "[xh][ ._-]?265|\\bHEVC(\\b|\\d)"}]},
+        {"name": "Not HDR/DV", "implementation": "ReleaseTitleSpecification", "negate": true, "required": true, "fields": [{"name": "value", "value": "\\b(dv|dovi|dolby[ .]?v(ision)?|hdr(10(P(lus)?)?)?|pq)\\b"}]},
+        {"name": "Not 2160p", "implementation": "ResolutionSpecification", "negate": true, "required": true, "fields": [{"name": "value", "value": 2160}]}
+      ]
+    },
+    {
+      "name": "Bad Dual Groups",
+      "score": -10000,
+      "note": "TRaSH-Guides trash_id b6832f586342ef70d9c128d40c07b872, full release-group list. Previously a placeholder {type,value} shape matching only the literal string 'example-bad-group' (i.e. nothing real) - replaced with the real full ReleaseGroupSpecification set.",
+      "specifications": [
+        {"name": "alfaHD", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(alfaHD.*)$"}]},
+        {"name": "BAT", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(BAT)$"}]},
+        {"name": "BlackBit", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(BlackBit)$"}]},
+        {"name": "BNd", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(BNd)$"}]},
+        {"name": "C.A.A", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(C\\.A\\.A)$"}]},
+        {"name": "C76", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(C76)$"}]},
+        {"name": "Cory", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(Cory)$"}]},
+        {"name": "CYPHER", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(CYPHER)$"}]},
+        {"name": "EniaHD", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(EniaHD)$"}]},
+        {"name": "EXTREME", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(EXTREME)$"}]},
+        {"name": "FF", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(FF)$"}]},
+        {"name": "FOXX", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(FOXX)$"}]},
+        {"name": "G4RiS", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(G4RiS)$"}]},
+        {"name": "GUEIRA", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(GUEIRA)$"}]},
+        {"name": "LCD", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(LCD)$"}]},
+        {"name": "MGE", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(MGE\\b.*)$"}]},
+        {"name": "MLH", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(MLH)$"}]},
+        {"name": "N3G4N", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(N3G4N)$"}]},
+        {"name": "ONLYMOViE", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(ONLYMOViE)$"}]},
+        {"name": "PD", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(PD)$"}]},
+        {"name": "PTHome", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(PTHome)$"}]},
+        {"name": "RiPER", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(RiPER)$"}]},
+        {"name": "RK", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(RK)$"}]},
+        {"name": "SiGLA", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(SiGLA)$"}]},
+        {"name": "Tars", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(Tars)$"}]},
+        {"name": "TM", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(TM\\b)$"}]},
+        {"name": "tokar86a", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(tokar86a)$"}]},
+        {"name": "TURG", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(TURG)$"}]},
+        {"name": "TvR", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(TvR)$"}]},
+        {"name": "vnlls", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(vnlls)$"}]},
+        {"name": "WTV", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(WTV)$"}]},
+        {"name": "XiQUEXiQUE", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(XiQUEXiQUE)$"}]},
+        {"name": "Yatogam1", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(Yatogam1)$"}]},
+        {"name": "YusukeFLA", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(YusukeFLA)$"}]},
+        {"name": "ZigZag", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(ZigZag)$"}]},
+        {"name": "ZNM", "implementation": "ReleaseGroupSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "^(ZNM)$"}]}
+      ]
+    },
+    {
+      "name": "Criterion Collection",
+      "score": 25,
+      "note": "TRaSH-Guides trash_id e0c07d59beb37348e975a930d5e50319. Applied live to Radarr on 2026-08-06, id=66, score=25 set on the 'Anything' quality profile (id=16).",
+      "specifications": [
+        {"name": "Bluray", "implementation": "SourceSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 9}]},
+        {"name": "DVD", "implementation": "SourceSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 5}]},
+        {"name": "Criterion", "implementation": "ReleaseTitleSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "\\b(Criterion)\\b"}]},
+        {"name": "CC", "implementation": "ReleaseTitleSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "\\b(CC)\\b"}]},
+        {"name": "Not Criterion RlsGrp", "implementation": "ReleaseGroupSpecification", "negate": true, "required": true, "fields": [{"name": "value", "value": "^(Criterion)$"}]}
+      ]
+    },
+    {
+      "name": "Blocklist: Unwanted Groups/Sources, RU-CN Audio, Blu-ray",
+      "score": -10000,
+      "note": "Applied live to Radarr on 2026-07-13, id=1, score set on every quality profile. Uses real Radarr customformat API specification shape (implementation/fields), unlike the placeholder entries above.",
+      "specifications": [
+        {"name": "Unwanted release groups/sources (user regex)", "implementation": "ReleaseTitleSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "(?i)\\b(WEB-DL|WEBRip|BDRip|HDRip|DVDRip|HDTV|AMZN|NF|DSNP|CR|YTS|TGX|TorrentGalaxy|FGT|LOL|KILLERS|EPSiLON|Erai-raws)\\b|rartv|rarbg|eztv"}]},
+        {"name": "Blu-ray filename patterns", "implementation": "ReleaseTitleSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "(?i)\\b(BluRay|Blu-Ray|BDRemux|BR-?Remux|BDMV|BD25|BD50|BD66|BD100|COMPLETE\\.BLURAY|BR-?DISK)\\b"}]},
+        {"name": "Russian language", "implementation": "LanguageSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 11}, {"name": "exceptLanguage", "value": false}]},
+        {"name": "Chinese language", "implementation": "LanguageSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 10}, {"name": "exceptLanguage", "value": false}]},
+        {"name": "Blu-ray source", "implementation": "SourceSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 9}]}
+      ]
+    }
+  ]
+}

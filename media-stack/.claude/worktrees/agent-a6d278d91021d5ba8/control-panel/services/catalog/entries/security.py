@@ -1,0 +1,36 @@
+"""Security & unified access catalog entries."""
+
+CATALOG: list[dict] = [
+    {
+        "id": "vaultwarden",
+        "name": "Vaultwarden",
+        "category": "Security & unified access",
+        "pitch": "Self-hosted, Bitwarden-compatible password vault - genuinely useful given how many per-service API keys this stack alone manages.",
+        "image": "vaultwarden/server",
+        "tag": "latest",
+        "ports": {"80/tcp": 8222},
+        "volumes": {"catalog_vaultwarden_data": {"bind": "/data", "mode": "rw"}},
+        "environment": {},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~30MB RAM",
+        "doc_url": "https://github.com/dani-garcia/vaultwarden",
+        "caveat": "Only use this behind the Caddy entry above - a password manager served over bare HTTP is a real risk, not installed with HTTPS on its own.",
+    },
+    {
+        "id": "organizr",
+        "name": "Organizr",
+        "category": "Security & unified access",
+        "pitch": "Embeds every service's actual web UI as tabs in one shell - keeps you inside the page instead of bouncing per app, unlike Homepage's link-launcher.",
+        "image": "ghcr.io/organizr/organizr",
+        "tag": "latest",
+        "ports": {"80/tcp": 8083},
+        "volumes": {"catalog_organizr_data": {"bind": "/config", "mode": "rw"}},
+        "environment": {},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~50MB RAM",
+        "doc_url": "https://github.com/Organizr/docker-organizr",
+        "caveat": None,
+    },
+]

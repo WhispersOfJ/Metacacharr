@@ -1,0 +1,9 @@
+[Unit]
+Description=Auto-apply Fanart.tv posters to the Movies library
+After=media-stack.service
+OnFailure=notify-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/bear/Claude/media-stack
+ExecStart=/usr/bin/python3 /home/bear/Claude/media-stack/scripts/poster-sync-fanart.py Movies

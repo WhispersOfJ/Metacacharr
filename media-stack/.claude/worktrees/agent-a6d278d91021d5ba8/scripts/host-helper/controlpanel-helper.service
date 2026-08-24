@@ -1,0 +1,29 @@
+[Unit]
+Description=controlpanel-helper privileged-action daemon
+Requires=controlpanel-helper.socket
+After=controlpanel-helper.socket
+Documentation=file:///home/bear/Claude/media-stack/scripts/host-helper/README.md
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/controlpanel-helper/helper.py
+# Socket-activated (see controlpanel-helper.socket) - systemd passes the
+# already-bound, already-listening socket on fd 3 and only starts this
+# process when a connection actually arrives, so the daemon isn't a
+# standing process most of the time.
+NonBlocking=true
+User=root
+StandardOutput=journal
+StandardError=journal
+Environment=CONTROLPANEL_HELPER_LOG=/var/log/controlpanel-helper.log
+# Hardening: no new privileges beyond what's already granted (root is
+# already the ceiling - this doesn't reduce it, but blocks e.g. setuid
+# binary tricks from raising it further), private /tmp, and the process
+# can't touch anything under /home - it doesn't need to, every verb it
+# runs targets the system (systemctl/pacman), not user files.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

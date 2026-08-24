@@ -1,0 +1,40 @@
+"""Library quality & sync catalog entries."""
+
+CATALOG: list[dict] = [
+    {
+        "id": "tdarr",
+        "name": "Tdarr",
+        "category": "Library quality & sync",
+        "pitch": "Distributed transcode automation - re-encodes the library against rules you set, commonly cutting storage 40-50% with no visible quality loss.",
+        "image": "haveagitgat/tdarr",
+        "tag": "latest",
+        "ports": {"8265/tcp": 8265, "8266/tcp": 8266},
+        "volumes": {
+            "catalog_tdarr_server": {"bind": "/app/server", "mode": "rw"},
+            "catalog_tdarr_configs": {"bind": "/app/configs", "mode": "rw"},
+            "catalog_tdarr_logs": {"bind": "/app/logs", "mode": "rw"},
+        },
+        "environment": {},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~200MB RAM; transcode work itself is CPU/GPU-bound",
+        "doc_url": "https://github.com/HaveAGitGat/Tdarr",
+        "caveat": "Server only - a Tdarr_Node (separate container) does the actual transcoding and isn't installed automatically.",
+    },
+    {
+        "id": "watchstate",
+        "name": "Watchstate",
+        "category": "Library quality & sync",
+        "pitch": "Syncs watch/play state between Plex and Trakt - broader scope than PlexTraktSync, which this replaces outright.",
+        "image": "ghcr.io/arabcoders/watchstate",
+        "tag": "latest",
+        "ports": {"8080/tcp": 8096},
+        "volumes": {"catalog_watchstate_data": {"bind": "/config", "mode": "rw"}},
+        "environment": {},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~60MB RAM",
+        "doc_url": "https://github.com/arabcoders/watchstate",
+        "caveat": None,
+    },
+]

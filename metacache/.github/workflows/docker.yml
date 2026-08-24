@@ -1,0 +1,197 @@
+name: Docker
+
+# Builds the container image, pushes it to GHCR on main (and version tags), and
+# gates every run on Trivy CVE scans (image + IaC config). A nightly schedule
+# rebuilds against the latest patched base images and re-scans, so base-image
+# CVEs get caught and fixed without waiting for a code change.
+#
+# Trivy runs as the official `aquasec/trivy` Docker image pinned by digest
+# policy (aquasec/trivy-action was supply-chain compromised in 2026 — CVE-2026-26189
+# and the March 2026 tag force-push — so we avoid that action entirely).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * *" # nightly rebuild + CVE rescan
+  workflow_dispatch: # manual rebuild + CVE rescan
+
+permissions:
+  contents: read
+
+jobs:
+  build-scan-push:
+    name: Build · CVE scan · push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # GHCR push
+      security-events: write # SARIF upload to code scanning
+      actions: read # upload-sarif queries the workflow run to attach SARIF
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=schedule,pattern=nightly
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Only GHCR-tagged images are pushed — a bare tag like metacache:ci
+          # would resolve to Docker Hub and fail the push (401, no credentials).
+          push: ${{ github.event_name != 'pull_request' }}
+          load: true # also load locally so Trivy can scan the exact image
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          # Cache writes need a write token — PRs (incl. Dependabot's read-only
+          # token) restore from the cache but don't write; pushes/schedule do.
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
+
+      - name: Tag image for scanning (local ref, never pushed)
+        run: |
+          first_tag=$(echo "${{ steps.meta.outputs.tags }}" | cut -d, -f1)
+          docker tag "$first_tag" metacache:ci
+
+      - name: Cache Trivy vulnerability DB
+        uses: actions/cache@v4
+        with:
+          path: trivy-cache
+          key: trivy-${{ runner.os }}-0.57.1
+
+      - name: Trivy — image CVE scan (gate)
+        # Fails the run on HIGH/CRITICAL fixable CVEs in the image (base image +
+        # published app); SARIF still uploads for code scanning on a failure.
+        id: trivy-image
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${{ github.workspace }}:/scan" \
+            -v "${{ github.workspace }}/trivy-cache:/root/.cache" \
+            -w /scan \
+            aquasec/trivy:0.57.1 image \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format sarif \
+            --output /scan/trivy-image.sarif \
+            --exit-code 1 \
+            metacache:ci
+
+      - name: Trivy — IaC/config scan (Dockerfile, compose)
+        # Misconfiguration gate: non-root USER, secret baking, etc. (AVD rules).
+        id: trivy-config
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            -v "${{ github.workspace }}/trivy-cache:/root/.cache" \
+            -w /src \
+            aquasec/trivy:0.57.1 config \
+            --severity HIGH,CRITICAL \
+            --format sarif \
+            --output /src/trivy-config.sarif \
+            --exit-code 1 \
+            .
+
+      - name: Trivy — pinned monitoring images scan (gate)
+        id: trivy-images
+        # Scans every third-party image pinned in monitoring/docker-compose.yml
+        # (the metacache service has no image: — it builds). Dependabot bumps
+        # these pins, so every PR re-scans the proposed version against the
+        # .trivyignore accept-list; the nightly schedule re-scans the pinned
+        # versions for newly disclosed CVEs. All images are scanned even if one
+        # fails, so the SARIF for each is still uploaded; the step then exits 1.
+        run: |
+          set -euo pipefail
+          images=$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(.*\)$/\1/p' monitoring/docker-compose.yml | tr -d '"' | sed 's/[[:space:]]*$//')
+          if [ -z "$images" ]; then
+            echo "no pinned images found in monitoring/docker-compose.yml"
+            exit 0
+          fi
+          mkdir -p sarif
+          failed=0
+          for img in $images; do
+            name=$(printf '%s' "$img" | tr '/:' '__')
+            echo "=== Trivy $img ==="
+            if ! docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "${{ github.workspace }}:/scan" \
+              -v "${{ github.workspace }}/trivy-cache:/root/.cache" \
+              -w /scan \
+              aquasec/trivy:0.57.1 image \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --ignorefile /scan/.trivyignore \
+              --format sarif \
+              --output "/scan/sarif/$name.sarif" \
+              --exit-code 1 \
+              "$img"; then
+              failed=1
+            fi
+          done
+          exit $failed
+
+      - name: Upload Trivy SARIF (image)
+        # Uploads run on success AND failure (findings gate) so the SARIF always
+        # lands in code scanning, but skip when the scan itself was skipped (e.g.
+        # an earlier step failed) — no files exist then. Dependabot PRs run with a
+        # read-only token, so skip there too. Best-effort: this repo is private,
+        # where code scanning needs GitHub Advanced Security, so the upload only
+        # succeeds once the repo is public (or GHAS is enabled) — the artifact
+        # upload below preserves the SARIF regardless.
+        if: always() && github.actor != 'dependabot[bot]' && steps.trivy-image.outcome != 'skipped'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+
+      - name: Upload Trivy SARIF (config)
+        if: always() && github.actor != 'dependabot[bot]' && steps.trivy-config.outcome != 'skipped'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-config.sarif
+
+      - name: Upload Trivy SARIF (monitoring images)
+        if: always() && github.actor != 'dependabot[bot]' && steps.trivy-images.outcome != 'skipped'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sarif # directory of per-image SARIF files
+
+      - name: Upload SARIF artifacts
+        # The SARIF files always land here, downloadable from the run summary,
+        # even on a private repo where code-scanning upload is best-effort above.
+        if: always() && github.actor != 'dependabot[bot]'
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-sarif
+          path: |
+            trivy-image.sarif
+            trivy-config.sarif
+            sarif/*.sarif
+          if-no-files-found: ignore

@@ -1,0 +1,97 @@
+# Prometheus alerting rules for Metacache (DESIGN.md §18).
+#
+# Scrape configuration — the job MUST be named "metacache" for these selectors:
+#
+#   scrape_configs:
+#     - job_name: metacache
+#       metrics_path: /metrics/prometheus
+#       static_configs:
+#         - targets: ["127.0.0.1:8765"]
+#
+# Validate with:  promtool check rules monitoring/metacache-alerts.yml
+#
+# Tuning notes
+# ------------
+# * The hit-rate alert uses rate() over the _total counters, NOT the lifetime
+#   metacache_cache_hit_ratio gauge: the gauge resets on process restart and
+#   hides recent degradation. It only fires while the cache is actually serving
+#   traffic (rate(requests) > 0.05/s, i.e. ~1 request per 20 s) — an idle cache
+#   never fires it.
+# * Disk thresholds are defaults for a single-host media server. Raise or lower
+#   them to match your library size and disk budget.
+# * The warm-stale alert fires when no warm attempt (success or failure) has
+#   completed for 36 h — a missed nightly run plus one maintenance window. The
+#   warm-failed alert covers runs that complete with per-item errors.
+
+groups:
+  - name: metacache
+    rules:
+      - alert: MetacacheDown
+        expr: up{job="metacache"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Metacache is unreachable
+          description: "The Metacache host {{ $labels.instance }} has not been scraped for 5 minutes. Plex metadata refreshes will fall back to upstream sources."
+
+      - alert: MetacacheHitRateLow
+        expr: |
+          (
+            rate(metacache_cache_hits_total{job="metacache"}[10m])
+            / clamp_min(rate(metacache_cache_requests_total{job="metacache"}[10m]), 0.001)
+          ) < 0.8
+          and rate(metacache_cache_requests_total{job="metacache"}[10m]) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Cache hit rate is low
+          description: "Hit rate over the last 10 minutes is {{ $value | humanizePercentage }}. A full library refresh, a failed warm, or new content is driving upstream traffic. Check /warm/status and the upstream metrics."
+
+      - alert: MetacacheImageCacheDiskHigh
+        expr: metacache_images_bytes{job="metacache"} > 10e9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Image cache is using a lot of disk
+          description: "The image cache holds {{ $value | humanize1024 }} of artwork. Purge or relocate it via Metacache:Images:Directory."
+
+      - alert: MetacacheUpstreamCacheDiskHigh
+        expr: (metacache_upstream_bytes{job="metacache"} + metacache_db_bytes{job="metacache"}) > 5e9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Upstream response cache is using a lot of disk
+          description: "Cached upstream responses + the SQLite DB total {{ $value | humanize1024 }}. Consider shortening TTLs or trimming the store."
+
+      - alert: MetacacheRateLimited
+        expr: increase(metacache_upstream_rate_limited_total{job="metacache"}[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Upstream is rate-limiting Metacache
+          description: "The {{ $labels.provider }} provider returned 429 responses over the last 10 minutes. TMDB's current API omits X-RateLimit-* headers, so this counter is the reliable throttle signal — check the warm schedule and TTLs."
+
+      - alert: MetacacheWarmFailed
+        expr: metacache_warm_last_errors{job="metacache"} > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: A warm run completed with errors
+          description: "The most recent {{ $labels.source }} warm finished with {{ $value }} item errors. Some of your library will miss from the cache; check the Metacache logs for per-item failures."
+
+      - alert: MetacacheWarmStale
+        expr: time() - metacache_warm_last_timestamp_seconds{job="metacache"} > 36 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: No warm has run for 36 hours
+          # Note: time() is PromQL-only — alert templates cannot compute "seconds ago",
+          # so the description is static (the expression already pins the threshold).
+          description: "The last warm attempt (success or failure) completed more than 36 hours ago. Check the scheduled warm config (Metacache:Warm:Enabled/ScheduleTime) and /warm/status."

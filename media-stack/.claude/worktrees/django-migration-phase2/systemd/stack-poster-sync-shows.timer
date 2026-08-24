@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily: auto-apply Fanart.tv posters to the Shows library
+
+[Timer]
+# 02:00 - well clear of stack-poster-sync-movies.timer's 06/14/22 runs.
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

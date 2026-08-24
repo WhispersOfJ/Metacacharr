@@ -1,0 +1,75 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    # Optional: Only run on specific file changes
+    # paths:
+    #   - "src/**/*.ts"
+    #   - "src/**/*.tsx"
+    #   - "src/**/*.js"
+    #   - "src/**/*.jsx"
+
+jobs:
+  claude-review:
+    # Skip entirely for Dependabot PRs (see CHANGELOG v7.2.2) rather than let the job run
+    # and fail: GitHub withholds repository secrets from pull_request runs triggered by
+    # dependabot[bot] (see the pull_request_target history below) - CLAUDE_CODE_OAUTH_TOKEN
+    # comes through empty every time, so this job cannot succeed on a Dependabot PR today
+    # regardless of allowed_bots below. A clean skip beats a red X for something structurally
+    # unfixable without a rewrite (the workflow_run two-workflow split GitHub recommends for
+    # this exact case) - "Validate Compose" already gives Dependabot PRs real CI signal, and
+    # the manual `@claude` comment workaround still works for a human-requested review.
+    #
+    # pull_request, not pull_request_target: tried pull_request_target to work around the
+    # secret-withholding above - that part worked, CLAUDE_CODE_OAUTH_TOKEN was read
+    # correctly, but anthropics/claude-code-action's own OIDC-based GitHub App token
+    # exchange then failed ("401 Unauthorized - Invalid OIDC token") specifically under
+    # pull_request_target's token claims. Reverted rather than dig into Anthropic's backend
+    # validation. Net effect: this still won't auto-fire on Dependabot-authored PRs, same as
+    # before - the working alternative is a manual `@claude` comment on the PR (confirmed
+    # working, triggers claude.yml instead).
+    #
+    # NOTE 2026-07-23: this guard was silently stripped once already by
+    # /install-github-app's automatic workflow template sync (PR #27) - that command
+    # refreshes CLAUDE_CODE_OAUTH_TOKEN but also overwrites these two workflow files with
+    # its current upstream template, discarding local customizations. Re-apply this comment
+    # block and the `if:`/`allowed_bots:` lines below after any future re-run of that
+    # command, don't assume they survive it.
+    if: github.actor != 'dependabot[bot]'
+    # Optional: Filter by PR author
+    # if: |
+    #   github.event.pull_request.user.login == 'external-contributor' ||
+    #   github.event.pull_request.user.login == 'new-developer' ||
+    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Scoped to Dependabot specifically (not '*') - this repo is private so the
+          # wildcard's "external Apps on public repos" risk doesn't strictly apply, but
+          # there's no reason to trust every bot when only one actually needs to trigger
+          # this. Dependabot's own PRs (opening a version-bump PR) were failing with
+          # "Workflow initiated by non-human actor" before this was added.
+          allowed_bots: 'dependabot[bot]'
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options
+

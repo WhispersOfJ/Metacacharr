@@ -1,0 +1,502 @@
+x-common: &common
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  environment: &common-env
+    PUID: ${PUID}
+    PGID: ${PGID}
+    TZ: ${TZ}
+  logging: &common-logging
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "10"
+  ulimits: &common-ulimits
+    nofile: 65536
+    nproc: 8192
+
+networks:
+  media-net:
+    name: media-net
+
+services:
+  # -------------------------------------------------------------------------
+  # Metacache - Custom Metadata Provider + Cache
+  # -------------------------------------------------------------------------
+  metacache:
+    build:
+      context: ./metacache
+      dockerfile: Dockerfile
+    container_name: metacache
+    networks: [media-net]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      TZ: ${TZ}
+      Metacache__BindAddress: "0.0.0.0"
+      Metacache__Port: "8765"
+      Metacache__DataPath: "/app/data"
+      Metacache__Upstream__BaseUrl: "https://api.themoviedb.org/3"
+      Metacache__Upstream__ImageBaseUrl: "https://image.tmdb.org"
+      Metacache__Tvdb__BaseUrl: "https://api.thetvdb.com"
+      Metacache__Tvdb__ApiKey: ${TVDB_KEY:-}
+      Metacache__Radarr__Url: "http://radarr:7878"
+      Metacache__Radarr__ApiKey: ${RADARR_API_KEY:-}
+      Metacache__Sonarr__Url: "http://sonarr:8989"
+      Metacache__Sonarr__ApiKey: ${SONARR_API_KEY:-}
+      Metacache__Warm__Languages__0: ${WARM_LANG_0:-en-US}
+      Metacache__Auth__ApiKey: ${METACACHE_API_KEY:-}
+    volumes:
+      - metacache-data:/app/data
+    ports:
+      - "8765:8765"
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 2
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8765/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # Indexing
+  # -------------------------------------------------------------------------
+  prowlarr:
+    <<: *common
+    image: ghcr.io/hotio/prowlarr:release
+    container_name: prowlarr
+    networks: [media-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9696/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - ./config/prowlarr:/config
+    ports:
+      - "9696:9696"
+    mem_limit: 1g
+    mem_reservation: 128m
+    cpus: 2
+
+  # -------------------------------------------------------------------------
+  # *arr apps
+  # -------------------------------------------------------------------------
+  radarr:
+    <<: *common
+    image: ghcr.io/hotio/radarr:release
+    container_name: radarr
+    networks: [media-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7878/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      nzbdav_rclone:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - ./config/radarr:/config
+      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rslave
+      - ./media/movies:/data/movies
+      - ./media/anime-movies:/data/anime-movies
+    ports:
+      - "7878:7878"
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 2
+    ulimits: *common-ulimits
+
+  sonarr:
+    <<: *common
+    image: ghcr.io/hotio/sonarr:release
+    container_name: sonarr
+    networks: [media-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8989/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      nzbdav_rclone:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - ./config/sonarr:/config
+      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rslave
+      - ./media/tv:/data/tv
+      - ./media/anime-tv:/data/anime-tv
+    ports:
+      - "8989:8989"
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 2
+    ulimits: *common-ulimits
+
+  # -------------------------------------------------------------------------
+  # Usenet / Streaming
+  # -------------------------------------------------------------------------
+  nzbdav:
+    <<: *common
+    build: ./usenet/nzbdav
+    container_name: nzbdav
+    networks: [media-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    environment:
+      <<: *common-env
+      FRONTEND_BACKEND_API_KEY: ${FRONTEND_BACKEND_API_KEY}
+    volumes:
+      - ./config/nzbdav:/config
+      - ./data/nzbdav:/data
+    ports:
+      - "3000:3000"
+    mem_limit: 2g
+    mem_reservation: 256m
+    cpus: 2
+
+  nzbdav_rclone:
+    <<: *common
+    image: rclone/rclone:latest
+    container_name: nzbdav_rclone
+    networks: [media-net]
+    healthcheck:
+      test: ["CMD", "rclone", "rc", "core/stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      nzbdav:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - ./config/nzbdav-rclone:/config/rclone
+      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rshared
+    command: ["mount", "nzbdav:", "/mnt/remote/nzbdav", "--config", "/config/rclone/rclone.conf", "--vfs-cache-mode", "full", "--allow-other"]
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 2
+
+  # -------------------------------------------------------------------------
+  # Media Serving
+  # -------------------------------------------------------------------------
+  plex:
+    <<: *common
+    image: plexinc/pms-docker:latest
+    container_name: plex
+    networks: [media-net]
+    hostname: plex
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:32400/identity || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    environment:
+      <<: *common-env
+      PLEX_CLAIM: ${PLEX_CLAIM:-}
+      ADVERTISE_IP: "http://${HOST_IP}:32400"
+    volumes:
+      - ./config/plex:/config
+      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rslave
+      - ./media:/data
+    ports:
+      - "32400:32400"
+      - "1900:1900/udp"
+      - "5353:5353/udp"
+      - "8324:8324"
+      - "32410:32410/udp"
+      - "32412:32412/udp"
+      - "32413:32413/udp"
+      - "32414:32414/udp"
+      - "32469:32469"
+    mem_limit: 4g
+    mem_reservation: 1g
+    cpus: 4
+
+  seerr:
+    <<: *common
+    image: ghcr.io/hotio/seerr:release
+    container_name: seerr
+    networks: [media-net]
+    depends_on:
+      plex:
+        condition: service_healthy
+        restart: true
+      radarr:
+        condition: service_healthy
+        restart: true
+      sonarr:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5055/api/v1/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - ./config/seerr:/config
+    ports:
+      - "5055:5055"
+    environment:
+      <<: *common-env
+      TZ: ${TZ}
+    mem_limit: 1g
+    mem_reservation: 128m
+    cpus: 2
+
+  unpackerr:
+    <<: *common
+    image: ghcr.io/hotio/unpackerr:release
+    container_name: unpackerr
+    networks: [media-net]
+    depends_on:
+      radarr:
+        condition: service_healthy
+        restart: true
+      sonarr:
+        condition: service_healthy
+        restart: true
+    environment:
+      <<: *common-env
+      UN_RADARR_0_URL: http://radarr:7878
+      UN_RADARR_0_API_KEY: ${RADARR_API_KEY:-}
+      UN_SONARR_0_URL: http://sonarr:8989
+      UN_SONARR_0_API_KEY: ${SONARR_API_KEY:-}
+      UN_INTERVAL: 5m
+      UN_START_DELAY: 1m
+      UN_LOG_LEVEL: info
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1
+
+  watchtower:
+    <<: *common
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    networks: [media-net]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      <<: *common-env
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_SCHEDULE: "0 0 4 * * *"
+      WATCHTOWER_ROLLING: "true"
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 1
+
+  cleanuparr:
+    <<: *common
+    image: ghcr.io/cleanuparr/cleanuparr:latest
+    container_name: cleanuparr
+    networks: [media-net]
+    depends_on:
+      radarr:
+        condition: service_healthy
+        restart: true
+      sonarr:
+        condition: service_healthy
+        restart: true
+    environment:
+      <<: *common-env
+      CLEANUPARR_RADARR_URL: http://radarr:7878
+      CLEANUPARR_RADARR_API_KEY: ${RADARR_API_KEY:-}
+      CLEANUPARR_SONARR_URL: http://sonarr:8989
+      CLEANUPARR_SONARR_API_KEY: ${SONARR_API_KEY:-}
+    volumes:
+      - ./config/cleanuparr:/config
+    ports:
+      - "8787:8787"
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 1
+
+  watchstate:
+    <<: *common
+    image: ghcr.io/arvida42/watchstate:latest
+    container_name: watchstate
+    networks: [media-net]
+    depends_on:
+      plex:
+        condition: service_healthy
+        restart: true
+    environment:
+      <<: *common-env
+      WS_UID: ${PUID}
+      WS_GID: ${PGID}
+    volumes:
+      - ./config/watchstate:/config
+    ports:
+      - "8080:8080"
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1
+
+  # -------------------------------------------------------------------------
+  # Monitoring
+  # -------------------------------------------------------------------------
+  prometheus:
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus/alerts.yml:/etc/prometheus/rules/alerts.yml:ro
+      - ./config/prometheus/metacache-alerts.yml:/etc/prometheus/rules/metacache-alerts.yml:ro
+      - data/prometheus:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.size=2GB"
+      - "--web.enable-lifecycle"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: ${TZ}
+    networks: [media-net]
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 2
+    ulimits: *common-ulimits
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  grafana:
+    <<: *common
+    image: grafana/grafana:latest
+    container_name: grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+    volumes:
+      - ./config/grafana:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3001:3000"
+    networks: [media-net]
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 2
+
+  loki:
+    <<: *common
+    image: grafana/loki:latest
+    container_name: loki
+    networks: [media-net]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./config/loki:/etc/loki
+      - data/loki:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 2
+
+  promtail:
+    <<: *common
+    image: grafana/promtail:latest
+    container_name: promtail
+    networks: [media-net]
+    depends_on:
+      loki:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - ./config/promtail:/etc/promtail
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    mem_limit: 512m
+    mem_reservation: 64m
+    cpus: 1
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    networks: [media-net]
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "8081:8080"
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 2
+
+  node-exporter:
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    pid: host
+    network_mode: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--web.listen-address=:9100"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+      - "--collector.netclass.ignored-devices=^(veth.*)$$"
+      - "--collector.netdev.device-exclude=^(veth.*)$$"
+    environment:
+      TZ: ${TZ}
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 1
+
+volumes:
+  metacache-data:
+  prometheus-data:
+  loki-data:

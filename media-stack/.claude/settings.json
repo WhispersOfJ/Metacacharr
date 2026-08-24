@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.prompt // empty' | grep -qiE 'trash.?can|marked (for|as) delet' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"Plex red trash-can inquiry detected: use both the plex-marked-deleted-db-contention skill (SQLite write contention) and the plex-red-trash-stale-fuse-handle skill (stale FUSE handle after nzbdav_rclone recreate) to diagnose before proposing a fix. Check container uptimes and try stat through the mount from plex vs a sibling container to distinguish the two.\"}}' || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

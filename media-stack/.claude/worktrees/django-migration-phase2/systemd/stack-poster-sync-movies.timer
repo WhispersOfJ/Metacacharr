@@ -1,0 +1,12 @@
+[Unit]
+Description=3x/day: auto-apply Fanart.tv posters to the Movies library
+
+[Timer]
+# 06:00/14:00/22:00 - offset from stack-poster-sync-shows.timer's 02:00 run
+# so the two never overlap (Control Panel's /api/posters/sync only allows
+# one sync running at a time and 409s the other otherwise).
+OnCalendar=*-*-* 06,14,22:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Stack container health check (Discord alert on change)
+After=media-stack.service
+# Same defense-in-depth as stack-plex-report.service - catches the
+# script's own failures (now including a failed `docker ps` itself, not
+# just the normal unhealthy/recovered diff) rather than that case going
+# unnoticed.
+OnFailure=notify-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/bear/Claude/media-stack
+ExecStart=/home/bear/Claude/media-stack/scripts/check-container-health.sh

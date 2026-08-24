@@ -1,0 +1,9 @@
+[Unit]
+Description=Diff-only sync of every tracked Letterboxd list to Radarr/Sonarr
+After=media-stack.service
+OnFailure=notify-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/bear/Claude/media-stack
+ExecStart=/usr/bin/python3 /home/bear/Claude/media-stack/scripts/letterboxd-sync.py

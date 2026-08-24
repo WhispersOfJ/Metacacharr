@@ -1,0 +1,1052 @@
+x-common: &common
+  restart: unless-stopped
+  environment: &common-env
+    PUID: ${PUID}
+    PGID: ${PGID}
+    TZ: ${TZ}
+  logging: &common-logging
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "10"
+  ulimits: &common-ulimits
+    nofile: 65536
+    nproc: 8192
+
+networks:
+  stacknet:
+    name: stacknet
+
+services:
+  # ---------------------------------------------------------------------
+  # Indexing
+  # ---------------------------------------------------------------------
+  prowlarr:
+    <<: *common
+    # Pinned to hotio's "release" channel tag rather than :latest - verified
+    # equivalent to whatever :latest currently resolves to (same digest), so
+    # this is a no-op today; going forward, Watchtower still tracks this
+    # channel but the choice is explicit rather than an ambiguous "latest".
+    image: ghcr.io/hotio/prowlarr:release@sha256:811390e411ad193cd57cdf8a79cbbba0f162e23ba0905899ba5be6df7bb6894d
+    container_name: prowlarr
+    networks: [stacknet]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9696/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - ./config/prowlarr:/config
+    ports:
+      - "9696:9696"
+    # No prior limit at all - found live via a resource audit (docker stats
+    # showing the full host ceiling instead of a real number). Sized from
+    # observed baseline (~195MB) with real headroom.
+    mem_limit: 1g
+    mem_reservation: 128m
+    cpus: 2
+
+  # ---------------------------------------------------------------------
+  # *arr apps
+  # ---------------------------------------------------------------------
+  radarr:
+    <<: *common
+    image: ghcr.io/hotio/radarr:release@sha256:2822513eb0f6663a53335fe9b65217cde20cfb10041ce97f369ef7f85deeca57
+    container_name: radarr
+    networks: [stacknet]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7878/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      nzbdav_rclone:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - ./config/radarr:/config
+      # nzbdav_rclone's mount point (replaces BearMount's native FUSE mount,
+      # 2026-07-28 cutover - see STACK.md's History). Symlinks land directly
+      # under here (completed-symlinks/) per NzbDAV's own symlink strategy,
+      # no separate import_dir bind needed unlike BearMount's SYMLINK mode.
+      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rslave
+      # Genuinely writable root folder on regular disk - the old debrid FUSE
+      # mounts did not support having files written into them (confirmed:
+      # symlink/hardlink/copy all failed there with I/O errors).
+      - ./media/movies:/data/movies
+      # Added during the Plan 3 anime-instance merge (2026-08-18): radarr-anime
+      # is being retired, its library folded into this instance with
+      # genre/tag-based routing instead of a separate instance.
+      - ./media/anime-movies:/data/anime-movies
+    ports:
+      - "7878:7878"
+    # No prior limit at all - found live via a resource audit. Sized above
+    # observed baseline (~390MB) with real headroom for a 15,000+ title
+    # library doing an active scan/import.
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 2
+    ulimits: *common-ulimits
+
+  sonarr:
+    <<: *common
+    image: ghcr.io/hotio/sonarr:release@sha256:2a67fa7b63de93f8fe4b2292b2ba968b4c6beb33dfa7b53eb94018c16f6ffc9a
+    container_name: sonarr
+    networks: [stacknet]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8989/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      nzbdav_rclone:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - ./config/sonarr:/config
+      # nzbdav_rclone's mount point - see radarr's matching mount comment above.
+      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rslave
+      - ./media/shows:/data/shows
+      # Added during the Plan 3 anime-instance merge (2026-08-18): sonarr-anime
+      # is being retired, its library folded into this instance with
+      # genre/tag-based routing instead of a separate instance.
+      - ./media/anime-shows:/data/anime-shows
+    ports:
+      - "8989:8989"
+    # No prior limit at all - found live via a resource audit. Sized above
+    # observed baseline (~477MB) with real headroom - this instance tracks
+    # close to 300,000 episode records (see Known gaps' missing-aired note).
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 2
+    ulimits: *common-ulimits
+
+  # radarr-anime and sonarr-anime retired 2026-08-18 (Plan 3 consolidation).
+  # Their libraries (728 movies, 1,022 series) were merged into base
+  # radarr/sonarr via genre/tag routing (seriesType=anime + tag id 1),
+  # verified with 0 migration failures and a full duplicate-title
+  # reconciliation pass. Anime media now lives under the same base
+  # instances at ./media/anime-movies and ./media/anime-shows (see the
+  # volume mounts on radarr/sonarr above).
+
+  # ---------------------------------------------------------------------
+  # Usenet - streaming, no local disk. Replaced BearMount entirely,
+  # 2026-07-28 (full cutover to nzbdav/nzbdav, the "super-fork" - see
+  # STACK.md's History for the full incident/decision). BearMount itself
+  # had replaced AltMount on 2026-07-24, which had replaced NzbDAV
+  # (nzbdav-dev) on 2026-07-23 - this is that same class of cutover
+  # happening a third time. Unlike BearMount, NzbDAV has NO native FUSE
+  # mount - it's WebDAV-only, so a separate rclone sidecar (nzbdav_rclone,
+  # below) does the actual mount. Radarr/Sonarr's download client points
+  # at nzbdav directly (SABnzbd-compatible API, port 3000).
+  # ---------------------------------------------------------------------
+  nzbdav:
+    restart: unless-stopped
+    logging: *common-logging
+    # Renamed upstream 2026-08: ghcr.io/nzbdav/nzbdav -> infinidysk/infinidysk.
+    # Same build (identical 16 layers and entrypoint; the old image's own
+    # org.opencontainers.image.source label already pointed at the
+    # infinidysk repo), same /config, same tags. The old path stops
+    # receiving updates after the transition period.
+    # v1.1.2 -> v1.2.1 2026-08-21: versioned admin API contract, arr import
+    # health on Overview, PAR2 background repair, no breaking changes noted.
+    image: ghcr.io/infinidysk/infinidysk:latest@sha256:a9d660991158da5df7979a302459c2c98480fc0cb29e4fb98b4a55ef29e07e77
+    container_name: nzbdav
+    networks: [stacknet]
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsSL http://localhost:3000/healthz > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+      FRONTEND_BACKEND_API_KEY: ${FRONTEND_BACKEND_API_KEY}
+      # Headless/authoritative Settings overlay (since v0.9.0) - every value
+      # below is otherwise a manual Settings-UI field. Mirrors
+      # FRONTEND_BACKEND_API_KEY so *Arr/SAB and the Settings UI agree on
+      # one download-client key.
+      NZBDAV_CONFIG__API__KEY: ${FRONTEND_BACKEND_API_KEY}
+      NZBDAV_CONFIG__API__CATEGORIES: "tv,movies,anime-movies,anime-shows"
+      NZBDAV_CONFIG__API__IMPORT_STRATEGY: "symlinks"
+      NZBDAV_CONFIG__WEBDAV__USER: ${NZBDAV_WEBDAV_USER}
+      NZBDAV_CONFIG__WEBDAV__PASS: ${NZBDAV_WEBDAV_PASS}
+      NZBDAV_CONFIG__RCLONE__MOUNT_DIR: "/mnt/remote/nzbdav"
+      NZBDAV_CONFIG__MEDIA__LIBRARY_DIR: "/mnt/remote/nzbdav/completed-symlinks"
+      NZBDAV_CONFIG__USENET__PROVIDERS: >-
+        {"Providers":[{"Type":1,"Host":"${NZBDAV_USENET_HOST}","Port":${NZBDAV_USENET_PORT},"UseSsl":true,"User":"${NZBDAV_USENET_USER}","Pass":"${NZBDAV_USENET_PASS}","MaxConnections":50,"Priority":0,"Nickname":"primary"},{"Type":1,"Host":"${NZBDAV_USENET_BACKUP_HOST}","Port":${NZBDAV_USENET_BACKUP_PORT},"UseSsl":true,"User":"${NZBDAV_USENET_BACKUP_USER}","Pass":"${NZBDAV_USENET_BACKUP_PASS}","MaxConnections":50,"Priority":0,"Nickname":"backup"}]}
+      # Settings audit 2026-07-31 (every settings page/config key checked against
+      # backend/Config/ConfigManager.cs - see STACK.md): cascade defaulted off, which
+      # meant primary/backup were raw-load-balanced by spare connection count instead of
+      # primary-preferred with backup as genuine fallback - the whole point of having a
+      # backup provider. Enabling this alone does nothing without the explicit Priority
+      # fields added above (both defaulted to 0, so they'd tie even with cascade on).
+      # play.*/watchtower.*/preflight.*/indexers.*/profiles.* were inert until
+      # 2026-08-11 (indexers.instances and profiles.instances were both empty -
+      # this stack routed everything through Prowlarr->Sonarr/Radarr only).
+      # Now wired up deliberately - see the "InfiniDysk's own search/play
+      # subsystem" block below QUEUE__WORKER_COUNT.
+      NZBDAV_CONFIG__USENET__CASCADE__ENABLED: "true"
+      # radarr-anime/sonarr-anime retired 2026-08-18 (Plan 3 consolidation) -
+      # their libraries were merged into the base instances via genre/tag
+      # routing (seriesType=anime + tag id 1), so only the base pair remains
+      # here. Keep in sync with core/arr_client.py's ARR_APPS.
+      NZBDAV_CONFIG__ARR__INSTANCES: >-
+        {"RadarrInstances":[{"Host":"http://radarr:7878","ApiKey":"${RADARR_API_KEY}"}],"SonarrInstances":[{"Host":"http://sonarr:8989","ApiKey":"${SONARR_API_KEY}"}],"QueueRules":[]}
+      # RE-ENABLED 2026-08-11 after re-auditing the actual 2026-07-29 root
+      # cause against the current infinidysk/infinidysk source (not just the
+      # old nzbdav-dev fork this stack ran back then). The exact bug is
+      # fixed upstream now:
+      #   - HealthCheckService.Repair()'s ordinary (non-urgent) path now has
+      #     GetLibraryLinkRepairDisposition() -> a missing GetLink() result
+      #     defers with ActionNeeded instead of deleting ("a FUSE mount can
+      #     temporarily present a successfully empty or partial view").
+      #     Deletion only reaches ForceDelete via an Arr-confirmed,
+      #     blocklisted match (RemoveAndBlocklistSucceeded) - every
+      #     ambiguous case (Arr unreachable, no download history, single
+      #     no-match) defers instead.
+      #   - AUTO_REMOVE_AFTER_FAILURES=0 below keeps the streaming-triggered
+      #     "urgent" force-delete branch (HandleUrgentRepair) permanently
+      #     off - GetUrgentRepairDisposition() short-circuits to
+      #     RepairNormally whenever threshold<=0, which is the only branch
+      #     that could still force-delete off a stale hasLibraryLink read.
+      # Radarr/Sonarr's own missing-file detection remains the backstop;
+      # this only adds proactive segment-decay detection + auto-reblocklist.
+      NZBDAV_CONFIG__REPAIR__ENABLE: "true"
+      NZBDAV_CONFIG__REPAIR__HEALTHCHECK_DEPTH: "standard"
+      NZBDAV_CONFIG__REPAIR__HEALTHCHECK_AGING: "true"
+      NZBDAV_CONFIG__REPAIR__HEALTHCHECK_CONCURRENCY: "50"
+      NZBDAV_CONFIG__REPAIR__AUTO_REMOVE_AFTER_FAILURES: "0"
+      NZBDAV_CONFIG__REPAIR__AUTO_REMOVE_UNLINKED_ONLY: "true"
+      # Rclone RC notifications - auto vfs/forget on file add/remove instead of
+      # relying purely on --dir-cache-time. Confirmed the RC test-connection
+      # endpoint returns "Connection refused" without this, 2026-07-28.
+      NZBDAV_CONFIG__RCLONE__RC_ENABLED: "true"
+      NZBDAV_CONFIG__RCLONE__HOST: "http://nzbdav_rclone:5572"
+      NZBDAV_CONFIG__RCLONE__USER: "rclone"
+      NZBDAV_CONFIG__RCLONE__PASS: ${NZBDAV_RCLONE_RC_PASS}
+      # Settings audit 2026-07-29 (docs read in full from nzbdav/nzbdav's own
+      # repo, cross-checked against live config via /api/get-config - see
+      # STACK.md): these five were confirmed unset/default and enabled
+      # deliberately, not guessed. NzbDAV's own daily backup closes the same
+      # class of gap that bit this stack's .env before (STACK.md 2026-07-26);
+      # worker-count (6, bumped from 3 - confirmed effective 2026-08-15) lets
+      # Radarr and Sonarr imports drain concurrently instead of serializing
+      # behind one worker. NOTE: 6 workers doubles concurrent-import pressure
+      # against the same 52-connection (2x26) provider pool that pipelining/
+      # preflight/watchdog budgets below were originally sized around at 3 -
+      # re-check that math if streaming quality regresses during heavy import.
+      NZBDAV_CONFIG__BACKUP__SCHEDULE_ENABLED: "true"
+      NZBDAV_CONFIG__BACKUP__SCHEDULE_TIME: "120" # 02:00 local (TZ)
+      NZBDAV_CONFIG__BACKUP__RETENTION_COUNT: "7"
+      # STILL DISABLED 2026-08-11, despite the 2026-07-29 partial-scan bug
+      # being fixed upstream (RemoveUnlinkedFilesTask.cs now has a >90%
+      # unlinked-ratio circuit breaker - see the REPAIR__ENABLE comment
+      # above for the same-day re-audit). A live dry-run against this
+      # library (POST /api/remove-unlinked-files/dry-run) hit a DIFFERENT,
+      # harder failure: SymlinkAndStrmUtil.ReadLinuxFindEntry throws an
+      # unhandled InvalidOperationException on a mojibake-encoded filename
+      # under anime-shows ("[DemiHuman] Sound! Euphonium..."), aborting the
+      # whole scan before it reaches the delete phase - fails closed (no
+      # deletions happened) but the task cannot complete on this library at
+      # all right now. Fix: rename that file to strip the corrupted
+      # characters, then re-run the dry-run via Settings -> Maintenance to
+      # confirm a clean pass before flipping this to "true".
+      NZBDAV_CONFIG__MAINTENANCE__REMOVE_ORPHANED_SCHEDULE_ENABLED: "false"
+      NZBDAV_CONFIG__MAINTENANCE__REMOVE_ORPHANED_SCHEDULE_TIME: "180" # 03:00 local (TZ)
+      NZBDAV_CONFIG__QUEUE__WORKER_COUNT: "6"
+      # --- Streaming performance, added 2026-08-11 (all off/default before) ---
+      # Segment cache: decoded article bytes cached to disk so a rewind/reseek
+      # in Plex doesn't re-fetch from Usenet. 20GB against the 122GB free on
+      # /config's filesystem. Needs the restart this recreate already does.
+      NZBDAV_CONFIG__USENET__SEGMENT_CACHE__ENABLED: "true"
+      NZBDAV_CONFIG__USENET__SEGMENT_CACHE__MAX_GB: "20"
+      # Queue-side NNTP pipelining (separate from WebDAV streaming pipelining,
+      # which was already on by default) - batches first-segment BODY requests
+      # during import, should help now that QUEUE__WORKER_COUNT=6 lets several
+      # imports compete for the same provider pool. Depth 8 is the documented
+      # default; run Auto-tune per provider from Settings -> Usenet afterward.
+      NZBDAV_CONFIG__USENET__PIPELINING__ENABLED: "true"
+      NZBDAV_CONFIG__USENET__PIPELINING__DEPTH: "8"
+      # Per-stream connection cap so one heavy stream can't starve a second
+      # concurrent Plex session against the 52-connection pool (2 providers x
+      # 26). Medium = 50% of the streaming budget per stream.
+      NZBDAV_CONFIG__USENET__MAX_DOWNLOAD_CONNECTIONS_PER_STREAM: "true"
+      NZBDAV_CONFIG__USENET__MAX_DOWNLOAD_CONNECTIONS_PER_STREAM_PRESET: "medium"
+      # Import-quality safeguards, both off by default - given this stack's
+      # import-bug history (7z/SharpCompress, symlink mass-deletion), catch a
+      # broken/sample release before it reaches Radarr/Sonarr's import step.
+      NZBDAV_CONFIG__API__ENSURE_IMPORTABLE_VIDEO: "true"
+      NZBDAV_CONFIG__API__SAMPLE_FILTER_ENABLED: "true"
+      # --- InfiniDysk's own search/play subsystem, added 2026-08-11 ---
+      # This is a second, separate search path from Prowlarr->Sonarr/Radarr:
+      # InfiniDysk's own Indexers+Search Profile, used only by Watchdog
+      # (playback failover to alternate releases), Preflight (background
+      # warm-up before a click), and Watchtower (pre-resolve list titles).
+      # Grabbed here, this shares the SAME indexer download-quota as
+      # Sonarr/Radarr (50 grabs/day per indexer, see PROWLARR_API_KEY usage
+      # elsewhere) - every budget below is sized deliberately small against
+      # that shared cap, not left at generous upstream defaults.
+      #
+      # Prowlarr pull-sync, wired 2026-08-20: v1.1.0 left RC on 2026-08-13
+      # (stable), deployed image is v1.1.2 (pulled 2026-08-17, confirmed
+      # via `docker inspect` Created timestamp matching the v1.1.2 GitHub
+      # release date) - past the "since 1.1.0" gate that blocked this
+      # 2026-08-11 (see git history for that FTL/unknown-env-var incident).
+      # Imports indexers into SQLite-owned indexers.instances, which powers
+      # WATCHTOWER__ENABLED/PLAY__WATCHDOG_ENABLED/PREFLIGHT__MODE below.
+      # profiles.instances stays env-managed (PROFILES__INSTANCES above)
+      # with IndexerNames left empty ("every enabled indexer" per
+      # profiles.md) specifically so a Prowlarr-side indexer rename/removal
+      # never needs a profile-reference rewrite - the one case docs warn
+      # env-managed profiles.instances would reject.
+      NZBDAV_CONFIG__PROWLARR__URL: "http://prowlarr:9696"
+      NZBDAV_CONFIG__PROWLARR__API_KEY: ${PROWLARR_API_KEY}
+      NZBDAV_CONFIG__PROWLARR__SYNC_ENABLED: "true"
+      NZBDAV_CONFIG__PROWLARR__SYNC_INTERVAL_MINUTES: "60"
+      # One profile searching every enabled (synced) indexer - IndexerNames
+      # empty = all, per profiles.md ("Leave all unchecked = every enabled
+      # indexer"). Token is a bearer secret for the adapter URLs; also
+      # referenced by WATCHTOWER__PROFILE_TOKEN below so both features share
+      # the one profile.
+      NZBDAV_CONFIG__PROFILES__INSTANCES: >-
+        {"Profiles":[{"Token":"${NZBDAV_PROFILE_TOKEN}","Name":"Default","IndexerNames":[]}]}
+      # Watchdog: alternate-release failover during playback. STAT-verify
+      # candidates before serving instead of "none" (the default) - cheap
+      # given repair is now also on.
+      NZBDAV_CONFIG__PLAY__WATCHDOG_ENABLED: "true"
+      NZBDAV_CONFIG__PLAY__VERIFY_MODE: "stat"
+      # Preflight: background warm-up on open, before the click. Settings
+      # match what was tuned live via /api/update-config on 2026-08-11
+      # (Option 2/Balanced from that audit) - moved here so they survive a
+      # recreate instead of only living in nzbdav's SQLite.
+      NZBDAV_CONFIG__PREFLIGHT__MODE: "standard"
+      NZBDAV_CONFIG__PREFLIGHT__MAX_ATTEMPTS: "8"
+      NZBDAV_CONFIG__PREFLIGHT__INDEXER_MAX_WAIT_SECONDS: "3"
+      NZBDAV_CONFIG__PREFLIGHT__TTL_SECONDS: "180"
+      # Watchtower: pre-resolves *manually added* list sources (IMDb ids /
+      # Stremio catalogs / URL lists) to a healthy release ahead of demand.
+      # Enabling this + the profile above only makes Watchtower *able* to
+      # run - it still does nothing until sources are added once from
+      # Settings -> Watchtower (sources aren't a ConfigItems key, so they
+      # can't be hardcoded here). Budget kept small on purpose: 15
+      # new-resolves/day and 2 NZB fetches per pass is a soft ceiling well
+      # under the 50/day indexer grab cap Sonarr/Radarr also share.
+      NZBDAV_CONFIG__WATCHTOWER__ENABLED: "true"
+      NZBDAV_CONFIG__WATCHTOWER__PROFILE_TOKEN: ${NZBDAV_PROFILE_TOKEN}
+      NZBDAV_CONFIG__WATCHTOWER__DAILY_RESOLVE_BUDGET: "15"
+      NZBDAV_CONFIG__WATCHTOWER__GRAB_CAP_PER_RESOLVE: "2"
+      NZBDAV_CONFIG__WATCHTOWER__RANKING: "largest"
+      NZBDAV_CONFIG__WATCHTOWER__SEASON_BUNDLE_FALLBACK: "true"
+    volumes:
+      - ./config/nzbdav:/config
+      - /mnt:/mnt
+    ports:
+      - "3000:3000"
+    mem_limit: 4g
+    mem_reservation: 512m
+    cpus: 4
+    ulimits: *common-ulimits
+
+  # rclone sidecar: NzbDAV has no native mount (pure WebDAV server), so this
+  # does the actual FUSE mount of NzbDAV's WebDAV tree at /mnt/remote/nzbdav
+  # for Plex/Radarr/Sonarr symlink imports. Binds ONLY that exact subpath,
+  # not the whole /mnt tree - see BearMount's own mount-table-leak incident
+  # (2026-07-25, STACK.md) for why binding a shared ancestor is dangerous.
+  nzbdav_rclone:
+    image: rclone/rclone:latest@sha256:b06aed988cf5967de7c25be5925240983981c757f4ed1ac9d2fa659d51d60548
+    container_name: nzbdav_rclone
+    restart: unless-stopped
+    logging: *common-logging
+    networks: [stacknet]
+    environment:
+      TZ: ${TZ}
+    volumes:
+      # Bind the PARENT dir, not /mnt/remote/nzbdav itself: bind-mounting the
+      # exact FUSE target makes rclone's own "already mounted" safety check
+      # misfire (that path already looks like a mount boundary from inside
+      # the container before rclone ever touches it) - confirmed live
+      # 2026-07-28, every attempt failed identically until this changed.
+      - /mnt/remote:/mnt/remote:rshared
+      - ./config/nzbdav-rclone/rclone.conf:/config/rclone/rclone.conf:ro
+      - ./config/nzbdav-rclone/cache:/cache
+    devices:
+      - /dev/fuse:/dev/fuse:rwm
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    # Confirms the FUSE mount is actually live, not just that the container
+    # process is running - a crash-looped rclone (see the 2026-08-13 incident
+    # note below) stays "Up" between restart attempts while the mount itself
+    # is gone, which a plain process-alive check would miss entirely.
+    healthcheck:
+      test: ["CMD-SHELL", "mountpoint -q /mnt/remote/nzbdav || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      nzbdav:
+        condition: service_healthy
+        restart: true
+    # Clear a stale mountpoint before mounting. `depends_on: nzbdav
+    # restart: true` above means every nzbdav restart also restarts this
+    # container - and rclone gets SIGKILLed without unmounting, leaving a
+    # dead FUSE mount on the host. rclone then refuses to remount ("directory
+    # already mounted") and crash-loops forever, while every dependent
+    # (plex/radarr/sonarr/bazarr/cleanuparr) is left holding a defunct handle.
+    # That is exactly what happened 2026-08-13 04:00: nzbdav restarted, rclone
+    # crash-looped ~3h, and Plex's scan stat-failed on everything and flagged
+    # 19,024 items deleted. The unmounts below are the self-heal: they are
+    # no-ops on a clean start and clear the corpse on a dirty one.
+    entrypoint: ["/bin/sh", "-c"]
+    # NOTE: single-element list, not a bare `command: >`. With a list
+    # entrypoint, compose word-splits a plain string command into separate
+    # argv entries, which would hand `sh -c` only the first word.
+    command:
+      - >
+        fusermount3 -uz /mnt/remote/nzbdav 2>/dev/null || true;
+        umount -l /mnt/remote/nzbdav 2>/dev/null || true;
+        exec rclone
+        mount nzbdav: /mnt/remote/nzbdav
+        --cache-dir=/cache
+        --uid=1000
+        --gid=1000
+        --allow-other
+        --links
+        --use-cookies
+        --vfs-cache-mode=full
+        --vfs-cache-max-size=50G
+        --vfs-cache-max-age=336h
+        --buffer-size=0M
+        --vfs-read-chunk-size=16M
+        --vfs-read-chunk-size-limit=512M
+        --no-checksum
+        --dir-cache-time=1h
+        --poll-interval=5m
+        --timeout=30s
+        --contimeout=15s
+        --low-level-retries=3
+        --rc
+        --rc-addr=:5572
+        --rc-user=rclone
+        --rc-pass=${NZBDAV_RCLONE_RC_PASS}
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 4
+    ulimits: *common-ulimits
+
+  # ---------------------------------------------------------------------
+  # Requests
+  # ---------------------------------------------------------------------
+  seerr:
+    restart: unless-stopped
+    logging: *common-logging
+    # Digest-pinned rather than a version tag: upstream's last tagged
+    # release (v3.0.1) is behind what's actually shipped as :latest (running
+    # version reports 3.3.0 via its own API) - no matching tag exists to pin
+    # to without downgrading, so this freezes exactly what's running today.
+    # Bump this digest deliberately when upstream cuts a new tagged release.
+    image: ghcr.io/seerr-team/seerr@sha256:f4768de5f616248d723e05891f3345a1402123775d03bf0890dbfedc0831bda1
+    container_name: seerr
+    networks: [stacknet]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5055/api/v1/status >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ./config/seerr:/app/config
+    ports:
+      - "5055:5055"
+    # No prior limit at all - found live via a resource audit. Sized above
+    # observed baseline (~72MB).
+    mem_limit: 1g
+    mem_reservation: 128m
+    cpus: 2
+    ulimits: *common-ulimits
+
+  # ---------------------------------------------------------------------
+  # Media server. Containerized from a native install in 3.3.0; the native
+  # plexmediaserver package, its systemd unit, and /var/lib/plex were fully
+  # removed in 4.8.0 - this container is the only Plex on the host now, no
+  # rollback fallback kept. See CHANGELOG for both.
+  # ---------------------------------------------------------------------
+  plex:
+    restart: unless-stopped
+    logging: *common-logging
+    # Official image, not a LinuxServer-style fork - a PUID/PGID-forcing
+    # image would recursively chown the ~33GB library to PUID/PGID on first
+    # boot.
+    # public channel, not Plex Pass (beta) - the official image only
+    # publishes the public channel. Deliberate, not an oversight - public
+    # channel on the official image is the more conservative choice for a
+    # containerized production library anyway.
+    # Switched from a pinned digest to :latest 2026-08-18 (deliberate policy
+    # change, not an oversight) - Watchtower now auto-updates this container
+    # nightly at 04:00 same as everything else in the stack, no more manual
+    # version bumps.
+    image: plexinc/pms-docker:latest@sha256:83a425ae9e133b1cb2cc3b809556e01c61cd8ff65c582e41b4374bc2210bac9e
+    container_name: plex
+    # Plex's own guidance for Docker: GDM auto-discovery, DLNA, and
+    # remote-access NAT-PMP/UPnP negotiation are all unreliable on bridge
+    # networking. Every other service in this stack already publishes
+    # directly to 0.0.0.0 with no reverse proxy, so this is a deliberate,
+    # documented exception to the stacknet/published-port pattern rather
+    # than an inconsistency - no networks:/ports: block, both are invalid
+    # alongside network_mode: host.
+    network_mode: host
+    environment:
+      TZ: ${TZ}
+      # Matches the uid/gid the native install used to own the library as,
+      # so the migrated ~33GB library needed zero chown. The native install
+      # is gone now (4.8.0), but this uid/gid still owns config/plex on
+      # disk, so it stays.
+      PLEX_UID: "955"
+      PLEX_GID: "955"
+      # Native Arch install set this to a flat directory (no
+      # Library/Application Support nesting); set it the same way here so
+      # config/plex/Plex Media Server could be copied over verbatim from
+      # /var/lib/plex without restructuring it.
+      PLEX_MEDIA_SERVER_APPLICATION_SUPPORT_DIR: /config
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:32400/identity || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      nzbdav_rclone:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - ./config/plex:/config
+      - ./config/plex-transcode:/transcode
+      - ./media/movies:/data/movies
+      - ./media/shows:/data/shows
+      - ./media/anime-movies:/data/anime-movies
+      - ./media/anime-shows:/data/anime-shows
+      # Root folders were symlinks into the original NzbDAV's WebDAV
+      # filesystem, then AltMount's, then BearMount's - each cutover broke
+      # every prior symlink since none of them share an ID scheme (see
+      # STACK.md's History). Now nzbdav_rclone's mount, 2026-07-28 cutover -
+      # same story: pre-cutover symlinks are broken again, new imports only.
+      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rslave
+    devices:
+      # Whole /dev/dri, not just renderD128: confirmed live 2026-07-28 that
+      # mapping renderD128 alone left every real (non-directstream) transcode
+      # falling back to software encode ("hardware transcoding: enabled, but
+      # no hardware decode accelerator found" every session, despite Plex Pass
+      # active, correct GPU detected, and the VAAPI driver already downloaded)
+      # - card1 and the by-path entries were missing from the container, and
+      # Plex's hardware-eligibility probe needs those, not just the render node.
+      - /dev/dri:/dev/dri
+    # video/render host GIDs - renderD128 is already world-writable
+    # (confirmed: crw-rw-rw-), so this is a defensive fallback rather than
+    # strictly required for VAAPI hardware transcoding to work.
+    group_add:
+      - "983"
+      - "987"
+    # Caught live during tuning: a library scan alone briefly pushed this to
+    # 100% CPU with zero active playback sessions (confirmed via /activities
+    # - "Scanning TV Shows", not a transcode). HW transcoding covers
+    # play/decode, not scan/analysis/thumbnail passes, so this can spike on
+    # its own. 12 of 16 threads leaves 4-thread desktop headroom on this host.
+    # mem_limit trimmed 6g -> 3g in a stack-wide mem_limit audit (v11.2.0):
+    # observed real usage was 231MB/6GiB (3.76%) with hardware transcoding
+    # doing all play/decode work (GPU-offloaded, not RAM-bound) - 3g still
+    # leaves ~13x headroom over the observed baseline. Not based on a live
+    # peak measurement during a heavy scan, unlike the cpus note above - if
+    # a future library scan is ever OOMKilled against this limit, raise it
+    # and document the real peak here rather than guessing again.
+    mem_limit: 3g
+    mem_reservation: 512m
+    cpus: 12
+    # CONFIRMED LIVE 2026-07-25: same root-cause class already fixed for
+    # bearmount (see its own stop_grace_period comment) - Plex's own
+    # shutdown sequence, when it needs to touch the FUSE mount or a busy
+    # SQLite DB during heavy import/analysis load, doesn't necessarily
+    # complete within Docker's 10s default. A ViewStateSync request hit
+    # "Waited over 10 seconds for a busy database" and 9s later Plex
+    # received a clean SIGTERM (Control Panel's own Tier 1 auto-restart,
+    # correctly triggered) and began an orderly shutdown - but the
+    # container's own StartedAt never advanced and it was left genuinely
+    # unkillable (`docker kill` failed with "tried to kill container, but
+    # did not receive an exit event"), needing the same Tier 3 FUSE-abort
+    # recovery as a real hang. In effect: the automated recovery action
+    # itself produced the exact failure class it exists to fix. 90s
+    # matches the same headroom already validated for bearmount.
+    stop_grace_period: 90s
+
+  # =======================================================================
+  # Optional / recommended extras - start with:
+  #   docker compose --profile extras up -d
+  # =======================================================================
+  # Subtitle management for Radarr/Sonarr - connected via API key post-boot
+  # Single dashboard for this stack: live container status/control, host
+  # stats, one-click ops actions, and a Quick Links panel
+  # to every service's own web UI. That last part is what let Heimdall and
+  # Homepage (both simple link launchers/widget dashboards, never this
+  # stack's ops tool) be removed entirely rather than kept alongside it -
+  # see README.md's Dashboard section. Custom build (control-panel/), not a
+  # pulled image.
+  control-panel:
+    build: ./control-panel
+    restart: unless-stopped
+    logging: *common-logging
+    container_name: control-panel
+    networks: [stacknet]
+    # Plex Health feature (Tier 3 "Force Unstick") - pid: host lets
+    # /api/plex/scan-health resolve Plex's real host PID for D-state
+    # thread introspection under /host-proc; cap_add + security_opt are
+    # what actually let the abort write to /host-sys-fuse succeed.
+    #
+    # Privilege rationale — what each cap enables and what breaks if removed:
+    #
+    #   pid: host
+    #     Enables: Plex D-state thread scan (/api/plex/scan-health,
+    #              /api/host-resources via /host-proc).
+    #     Breaks if removed: scan-health returns empty D-state lists;
+    #              host-resources falls back to 503.
+    #
+    #   SYS_ADMIN
+    #     Enables: Force Unstick writes to /host-sys-fuse/connections/<id>/abort
+    #              (the automated mount recovery from a wedged FUSE connection).
+    #     Breaks if removed: Force Unstick's abort writes fail with EPERM;
+    #              the manual workaround (restart nzbdav_rclone) still works.
+    #
+    #   SYS_PTRACE
+    #     Enables: nsenter into host mount namespaces (unstick-ffprobe-hang's
+    #              automated mount recovery — reading /proc/<pid>/ns/mnt).
+    #              This IS a real privilege widening: ptrace on any host process.
+    #     Breaks if removed: automated unstick-ffprobe-hang recovery fails;
+    #              no other feature depends on it.
+    #
+    #   apparmor:unconfined
+    #     Enables: everything above (SYS_ADMIN + SYS_PTRACE are blocked by
+    #              default AppArmor policy on this host).
+    #     Breaks if removed: every cap_add above becomes a no-op;
+    #              Force Unstick and unstick-ffprobe both fail.
+    #
+    # Start minimal before adding anything broader if a real permission
+    # error proves it's needed — see CLAUDE.md. SYS_PTRACE added
+    # 2026-07-26 for _host_lazy_umount's nsenter call — accepted
+    # deliberately (see CLAUDE.md).
+    pid: host
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    environment:
+      # Added 2026-08-13 (Phase 7). This container had no TZ, so it ran on UTC
+      # while every other surface Bear reads is EDT - core/responses.now()
+      # calls .astimezone() and got UTC back, meaning every "time" field the
+      # panel has ever returned was silently 4-5 hours off local. Found while
+      # /api/plexanisync/last-run reported a 12:07 run as 16:07.
+      TZ: ${TZ}
+      # Jellyfin removed entirely (reverted back to Plex - see CLAUDE.md's
+      # History for the reversion and the reasons behind it).
+      PLEX_URL: ${PLEX_URL}
+      PLEX_TOKEN: ${PLEX_TOKEN}
+      RADARR_API_KEY: ${RADARR_API_KEY}
+      SONARR_API_KEY: ${SONARR_API_KEY}
+      # NzbDAV (nzbdav-dev) removed entirely 2026-07-23, then AltMount removed
+      # entirely 2026-07-24, then BearMount removed entirely 2026-07-28 (see
+      # STACK.md's History) - nzbdav/nzbdav's shared frontend<->backend proxy
+      # key doubles as its SABnzbd-compatible API key.
+      FRONTEND_BACKEND_API_KEY: ${FRONTEND_BACKEND_API_KEY}
+      # Prowlarr has no other integration in this stack (CONTAINER_LABELS
+      # dashboard entry only) - added specifically so /api/log-levels can
+      # cover all five Servarr-shaped apps, not just the four QUEUE_ARR_APPS.
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY}
+      # notify_test() only - reuses the same webhook every backup/health
+      # alert script already posts to, no new secret.
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      # Origin/Host validation only (see app.py's verify_same_origin) - not
+      # auth, just closing the cross-origin-POST hole given this panel's
+      # docker.sock access.
+      HOST_IP: ${HOST_IP}
+      # Poster sync (/api/posters/sync, /api/posters/review) - this app's
+      # own TMDb, Fanart.tv, and TheTVDB keys.
+      TMDB_KEY: ${TMDB_KEY}
+      FANART_KEY: ${FANART_KEY}
+      TVDB_KEY: ${TVDB_KEY}
+      # /api/ratings/imdb, /api/ratings/mdblist - standalone secrets.
+      OMDB_KEY: ${OMDB_KEY}
+      MDBLIST_KEY: ${MDBLIST_KEY}
+      # Phase 6: WatchState's API key. Every /v1/api call needs it, since
+      # WS_SECURE_API_ENDPOINTS is on.
+      WS_API_KEY: ${WS_API_KEY}
+      # Evolved backend (main.py) - service-account key for unattended
+      # stack-* fish commands; see .env's comment and
+      # core/security.py's current_user_or_service.
+      CONTROL_PANEL_SERVICE_API_KEY: ${CONTROL_PANEL_SERVICE_API_KEY}
+      # Session-cookie signing key (core/security.py's create_session_token)
+      # and the single bootstrap admin account (main.py's _bootstrap_admin -
+      # no-op after the first user row exists, so rotating the password here
+      # later requires updating the DB directly, not just this var).
+      CONTROL_PANEL_SECRET_KEY: ${CONTROL_PANEL_SECRET_KEY}
+      CONTROL_PANEL_ADMIN_USERNAME: ${CONTROL_PANEL_ADMIN_USERNAME}
+      CONTROL_PANEL_ADMIN_PASSWORD: ${CONTROL_PANEL_ADMIN_PASSWORD}
+      # Only needed if a reverse proxy with TLS fronts this panel. With
+      # secure=True, browsers refuse to send the session cookie over plain
+      # HTTP — don't set this on a plain-LAN setup (the default).
+      CONTROL_PANEL_SECURE_COOKIE: ${CONTROL_PANEL_SECURE_COOKIE:-}
+    volumes:
+      # Read-write, unlike Homepage's docker.sock mount above - this one
+      # issues restarts, not just reads status. Runs as root in-container (no
+      # PUID/PGID) since root is what the socket needs; no other privilege
+      # escalation beyond that. No auth - LAN-only, matches every other
+      # service in this stack (see README.md's Security section); the
+      # elevated blast radius here (exec/restart the whole stack from one
+      # unauthenticated endpoint) is mitigated by the Origin/Host check
+      # below, not by a login gate.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Read-only additions for the stack-* diagnostic endpoints
+      # (resource-check/mount-health/perms-check/etc.) - none of these
+      # need write access, only visibility into what's already there.
+      - /mnt:/mnt:ro
+      - ./config:/host-config:ro
+      # Plex Health feature (Tier 3 "Force Unstick") - real, meaningful
+      # increase in blast radius for an unauthenticated LAN-only service,
+      # see CLAUDE.md's Security section for the tradeoff this accepts.
+      # /host-proc is read-only (D-state thread introspection only);
+      # /host-sys-fuse is NOT read-only - Force Unstick writes
+      # .../connections/<id>/abort to abort a wedged FUSE connection, the
+      # same host-level action this session did by hand during the
+      # 2026-07-25 hang (see CLAUDE.md's landmines section).
+      - /proc:/host-proc:ro
+      - /sys/fs/fuse:/host-sys-fuse
+      # Single-file bind mount, not a directory - confirmed live this
+      # session as a real gotcha: Docker binds a specific inode for a
+      # single-file mount, not the directory entry, so an editor that
+      # replaces the file (write-new-inode-then-rename, which most
+      # editors/tools do for atomic writes) leaves the mount pointing at
+      # the old, now-unlinked inode. /api/version reported a stale
+      # declared version through several README edits until this
+      # container was explicitly recreated (`--force-recreate`, not just
+      # `up -d` - a plain `up -d` doesn't recreate a container whose own
+      # config hasn't changed). If /api/version ever looks stale again,
+      # recreate this container before assuming the endpoint logic broke.
+      - ./README.md:/host-README.md:ro
+      # Writable, unlike everything else above - just the poster-sync
+      # cooldown state file (/data/poster-sync-state.json, last-applied
+      # timestamp per Plex ratingKey) so the 48h-per-movie gate survives a
+      # container restart/recreate instead of resetting every deploy.
+      - ./config/control-panel:/data
+      # core/logging_config.py's shared logger - RotatingFileHandler at
+      # /logs/control-panel.log, bind-mounted so logs survive a container
+      # restart/recreate instead of living only in `docker logs`.
+      - ./logs/control-panel:/logs
+      # Host-privileged-action helper (reboot / pacman sync / pacman
+      # upgrade) - see .claude/plans/host-privileged-helper.plan.md and
+      # scripts/host-helper/README.md. Commented out by default: this
+      # mount only works once the host-side controlpanel-helper daemon is
+      # installed (systemd socket unit owns /run/controlpanel-helper.sock
+      # on the host). Until then /api/host/reboot, /api/host/pacman-sync,
+      # and /api/host/pacman-upgrade return a clear 503, not a crash -
+      # this feature is optional. Uncomment the line below AFTER running
+      # the install steps in the README, then `docker compose up -d
+      # --force-recreate control-panel`.
+      - /run/controlpanel-helper.sock:/host-helper.sock
+    # No prior ceiling despite having docker.sock exec/restart access - a
+    # light Flask app, but cheap insurance given its elevated blast radius.
+    ports:
+      - "8420:8420"
+    mem_limit: 512m
+    mem_reservation: 64m
+    cpus: 2
+    ulimits: *common-ulimits
+
+  unpackerr:
+    restart: unless-stopped
+    logging: *common-logging
+    # Digest-pinned: upstream's newest tagged release (0.15.2) doesn't match
+    # what's actually shipped as :latest - no matching tag exists to pin to
+    # without downgrading, so this freezes exactly what's running today.
+    # Bump this digest deliberately when ready to take a newer release.
+    image: golift/unpackerr@sha256:4ec141eeb0cb2f971d7c92f21cc40b0d2d50d7920eb7a0557443cca52270c0b0
+    container_name: unpackerr
+    networks: [stacknet]
+    # No web UI/API - checks that the main unpackerr process is still alive
+    # via /proc rather than an HTTP probe.
+    healthcheck:
+      test: ["CMD-SHELL", "grep -aq unpackerr /proc/[1-9]*/cmdline 2>/dev/null || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      nzbdav_rclone:
+        condition: service_healthy
+        restart: true
+    environment:
+      TZ: ${TZ}
+      # Was missing every API key below (not just blank - entirely absent), so Unpackerr ran
+      # with "0 servers" configured since the day it was added. Confirmed live via its own
+      # startup log: "No Starr apps or folders configured."
+      UN_RADARR_0_URL: http://radarr:7878
+      UN_RADARR_0_API_KEY: ${RADARR_API_KEY}
+      UN_SONARR_0_URL: http://sonarr:8989
+      UN_SONARR_0_API_KEY: ${SONARR_API_KEY}
+      # No UN_READARR entry - Bindery replaced Readarr in v10.7.0 and isn't
+      # a supported Unpackerr "Starr app" (too new for that fixed list).
+      # Low-impact: ebook releases are rarely RAR'd the way video/audio
+      # ones are.
+    volumes:
+      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rslave
+      # :rslave here was a no-op copy-paste from the mount above - ./usenet is
+      # a plain local bind (empty except a tmp/ subdir, not referenced by any
+      # UN_* extraction path in this block), not a shared-propagation source,
+      # so rslave did nothing. Left as a plain bind; not removed outright
+      # since it's unclear whether something outside this file still expects
+      # the path to exist.
+      - ./usenet:/usenet
+    # No prior ceiling - extraction (unzip/unrar) can spike CPU briefly on
+    # large archives, cheap insurance same as the other companion apps above.
+    mem_limit: 512m
+    mem_reservation: 64m
+    cpus: 2
+    ulimits: *common-ulimits
+
+  watchtower:
+    restart: unless-stopped
+    logging: *common-logging
+    image: nickfedor/watchtower:latest@sha256:d76a95a54ab636968f77cb1780fb597b3e28511b535a86e3af212a290ef4d743
+    container_name: watchtower
+    networks: [stacknet]
+    # No shell in this image (distroless-style) - uses Watchtower's own
+    # built-in --health-check flag rather than a wget/curl probe.
+    healthcheck:
+      test: ["CMD", "/watchtower", "--health-check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    environment:
+      TZ: ${TZ}
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_SCHEDULE: "0 0 4 * * *"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # No prior ceiling - idle daemon most of the time, cheap insurance
+    # despite the docker.sock access it needs to do its job.
+    mem_limit: 256m
+    mem_reservation: 32m
+    cpus: 1
+    ulimits: *common-ulimits
+
+  # ---------------------------------------------------------------------
+  # Queue cleanup automation. Automates what Control Panel's own "unstick"
+  # button already does by hand - strikes/malware-blocking/stalled-cleanup.
+  # NeutArr (missing-content hunting) was removed entirely 2026-07-24, by
+  # explicit request, after its hunting flood repeatedly caused runaway
+  # blocklist_search loops in BearMount and a Plex SQLite lock-contention
+  # stall from the resulting import burst (see CLAUDE.md's History) - no
+  # automated missing-content hunting runs in this stack anymore.
+  # ---------------------------------------------------------------------
+  cleanuparr:
+    <<: *common
+    image: ghcr.io/cleanuparr/cleanuparr:2.10.5
+    container_name: cleanuparr
+    networks: [stacknet]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11011/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      nzbdav_rclone:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - ./config/cleanuparr:/config
+      # Cleanuparr's QueueCleaner/MalwareBlocker jobs need filesystem access
+      # to whatever path the download client's own API reports as each queue
+      # item's location - nzbdav_rclone's mount, since BearMount was removed
+      # entirely 2026-07-28 (see STACK.md's History).
+      - /mnt/remote/nzbdav:/mnt/remote/nzbdav:rslave
+    # No prior observation - generous default ceiling, same reasoning as
+    # every other companion app in this file.
+    ports:
+      - "11011:11011"
+    mem_limit: 512m
+    mem_reservation: 64m
+    cpus: 2
+    ulimits: *common-ulimits
+
+  # ---------------------------------------------------------------------
+  # new-services (2026-08) - see PLANS.md for the full 7-service spec this
+  # batch comes from. Each phase is its own commit; this is Phase 1.
+  # ---------------------------------------------------------------------
+
+  # WatchState - Phase 6 of PLANS.md's 7-service batch. Keeps its own record of
+  # what has been watched, fed from Plex by a scheduled import plus a webhook.
+  #
+  # Five things this block encodes that are not obvious:
+  #
+  # 1. user: is load-bearing, not tidiness. The image runs rootless and exits
+  #    outright if it cannot write /config (upstream README calls this out; its
+  #    own example sets user explicitly). PUID/PGID own ./config/watchstate.
+  #
+  # 2. WS_SECURE_API_ENDPOINTS=true. Without it the whole /v1/api surface is
+  #    unauthenticated to anything that can reach the port - including the
+  #    endpoints that hand back backend tokens.
+  #
+  # 3. WS_CRON_IMPORT is on AND a Plex webhook is configured. That redundancy
+  #    is deliberate on both sides: upstream's README says to keep the
+  #    scheduled import enabled even when every backend supports webhooks,
+  #    because webhooks drop events. Do not "optimize" one of them away.
+  #
+  # 4. The import skips 02:00-05:59. That window already holds the poster sync
+  #    (02:00), the Arr backup (03:40), the Letterboxd sync (04:00), the Sunday
+  #    docker prune (04:30) and Plex's own Butler tasks. This stack has
+  #    confirmed SQLite write contention when Plex's DB takes concurrent write
+  #    pressure from several directions (plex-marked-deleted-db-contention),
+  #    and an import walks every library.
+  #
+  # 5. Healthcheck hits /v1/api/system/healthcheck, not "/" - "/" is the
+  #    bundled WebUI and answers 200 with a dead backend behind it, the same
+  #    failure mode Phases 4 and 5 both hit. It needs the API key, since (2)
+  #    makes every API endpoint authenticated.
+  watchstate:
+    restart: unless-stopped
+    image: ghcr.io/arabcoders/watchstate:latest@sha256:e26aef6772ad3a1a83e26cd5fb56c9798ab2c04de4d88806e4d76e8955eaac89
+    container_name: watchstate
+    user: "${PUID}:${PGID}"
+    ulimits: *common-ulimits
+    environment:
+      TZ: "${TZ}"
+      WS_TZ: "${TZ}"
+      WS_API_KEY: "${WS_API_KEY}"
+      WS_SECURE_API_ENDPOINTS: "true"
+      WS_SYSTEM_SECRET: "${WS_SYSTEM_SECRET}"
+      WS_CRON_IMPORT: "true"
+      WS_CRON_IMPORT_AT: "25 0-1,6-23 * * *"
+      # Export would write watch state back INTO Plex. With Plex as the only
+      # backend there is nothing to write back from, and an accidental export
+      # is a mass-write against the same DB (4) exists to protect.
+      WS_CRON_EXPORT: "false"
+    networks: [stacknet]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -H \"X-apikey: $${WS_API_KEY}\" http://localhost:8080/v1/api/system/healthcheck || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      # SQLite state DB, backend config and logs. Covered by
+      # stack-claude-full-backup's no-excludes tar of ~/Claude.
+      - ./config/watchstate:/config
+    ports:
+      - "8705:8080"
+    mem_limit: 512m
+    mem_reservation: 64m
+    cpus: 1
+
+  # =======================================================================
+
+  # =======================================================================
+  # Stage 1: Centralized Logging (Loki + Promtail + Grafana)
+  # =======================================================================
+  loki:
+    restart: unless-stopped
+    image: grafana/loki:2.8.0@sha256:0d28e4dddd4ccce1772544a501e8b8f96595accbb74ee8cd0415bce81dd2edfc
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./config/loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - ./data/loki:/loki
+    command: -config.file=/etc/loki/loki-config.yaml
+    environment:
+      TZ: ${TZ}
+    networks: [stacknet]
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 2
+    ulimits: *common-ulimits
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  promtail:
+    restart: unless-stopped
+    image: grafana/promtail:2.8.0@sha256:f2d34db787476fbf0b5b9e69f9dac40762c362b9ad1f9e420895b1fc02b60b30
+    container_name: promtail
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/promtail/promtail-config.yaml:/etc/promtail/config.yaml:ro
+    command: -config.file=/etc/promtail/config.yaml
+    environment:
+      TZ: ${TZ}
+    networks: [stacknet]
+    mem_limit: 512m
+    mem_reservation: 64m
+    cpus: 1
+    ulimits: *common-ulimits
+    depends_on:
+      loki:
+        condition: service_healthy
+        restart: true
+
+  grafana:
+    restart: unless-stopped
+    image: grafana/grafana:10.4.0@sha256:f9811e4e687ffecf1a43adb9b64096c50bc0d7a782f8608530f478b6542de7d5
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./data/grafana:/var/lib/grafana
+    environment:
+      TZ: ${TZ}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-password123}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+      GF_ALERTING_ENABLED: "false"
+      GF_UNIFIED_ALERTING_ENABLED: "true"
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+    networks: [stacknet]
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1
+    ulimits: *common-ulimits
+    depends_on:
+      loki:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  loki_data:

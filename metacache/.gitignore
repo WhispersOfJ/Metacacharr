@@ -1,0 +1,21 @@
+## .NET build artifacts
+bin/
+obj/
+out/
+publish/
+*.user
+*.suo
+
+## IDE
+.vs/
+.idea/
+.vscode/
+
+## Runtime data (created by the app)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+## Local provisioning secrets (docker compose .env — never commit)
+monitoring/.env

@@ -1,0 +1,36 @@
+"""Household & access catalog entries."""
+
+CATALOG: list[dict] = [
+    {
+        "id": "wizarr",
+        "name": "Wizarr",
+        "category": "Household & access",
+        "pitch": "Self-service invite links for Plex - a friend clicks one link and is onboarded, including a walkthrough to install Plex and use Seerr.",
+        "image": "ghcr.io/wizarrrr/wizarr",
+        "tag": "latest",
+        "ports": {"5690/tcp": 5690},
+        "volumes": {"catalog_wizarr_data": {"bind": "/data/database", "mode": "rw"}},
+        "environment": {},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~70MB RAM",
+        "doc_url": "https://github.com/wizarrrr/wizarr",
+        "caveat": None,
+    },
+    {
+        "id": "homepage",
+        "name": "Homepage",
+        "category": "Household & access",
+        "pitch": "A simple bookmark/status launcher for household members who shouldn't see the operator console - separate audience from the control panel.",
+        "image": "ghcr.io/gethomepage/homepage",
+        "tag": "latest",
+        "ports": {"3000/tcp": 3009},
+        "volumes": {"catalog_homepage_config": {"bind": "/app/config", "mode": "rw"}},
+        "environment": {},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~60MB RAM",
+        "doc_url": "https://github.com/gethomepage/homepage",
+        "caveat": "Chosen over Homarr - Homarr's GitHub repo currently shows archived. Config-as-code, edited via files in its volume, not a UI.",
+    },
+]

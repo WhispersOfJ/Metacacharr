@@ -1,0 +1,34 @@
+name: release-please
+
+# Watches conventional-commit messages on main and maintains a standing
+# "release PR" that accumulates them into CHANGELOG.md and bumps the
+# version in release-please-config.json's extra-files (currently just
+# README's "Current version" line). Merging that PR cuts the actual
+# GitHub Release + tag, which publish-installer.yml then builds against.
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v5
+        with:
+          # A user PAT, not the default GITHUB_TOKEN. GitHub deliberately does
+          # not fire pull_request workflows for a PR opened with GITHUB_TOKEN
+          # (recursion guard), which left every release PR sitting at
+          # "action_required" - validate.yml and claude-code-review.yml never
+          # ran, so releases merged unvalidated. A PAT-opened PR triggers them
+          # normally. Fine-grained token, contents + pull-requests read/write,
+          # scoped to this repo only. EXPIRES 2027-08-14 - release PRs stop
+          # being created entirely when it lapses, with no other symptom.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

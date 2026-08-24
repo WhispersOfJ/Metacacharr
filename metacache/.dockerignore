@@ -1,0 +1,16 @@
+**/bin
+**/obj
+**/out
+.git
+.gitignore
+DESIGN.md
+README.md
+
+## CI/CD
+.github
+**/TestResults
+*.sarif
+trivy-cache/
+
+## Local provisioning secrets — never let these enter the build context
+monitoring/.env

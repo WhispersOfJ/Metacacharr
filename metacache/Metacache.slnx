@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Metacache.Core/Metacache.Core.csproj" />
+    <Project Path="src/Metacache.Host/Metacache.Host.csproj" />
+    <Project Path="src/Metacache.Plex/Metacache.Plex.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Metacache.Host.Tests/Metacache.Host.Tests.csproj" />
+  </Folder>
+</Solution>

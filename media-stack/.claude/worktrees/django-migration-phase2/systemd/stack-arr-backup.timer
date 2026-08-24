@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Radarr/Sonarr native backup
+
+[Timer]
+# Before Watchtower's 04:00 image updates.
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

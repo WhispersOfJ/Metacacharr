@@ -1,0 +1,75 @@
+name: Publish installer image
+
+# Builds the Dockerfile (bundles docker-compose.yml, scripts/,
+# systemd/, and docs into a run-to-extract installer image - see
+# entrypoint.sh) and publishes it to GHCR whenever release-please cuts a new
+# release (see release-please.yml). Private package by default, matching
+# this repo's visibility.
+#
+# Version now comes from the release tag release-please created, not a
+# regex grep of README's "Current version" line - release-please already
+# keeps that line in sync (via release-please-config.json's extra-files),
+# but the tag is the more direct source now that it exists.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v11.13.0) - required for manual runs"
+        required: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Lowercase image name
+        id: image
+        # GHCR requires lowercase - github.repository preserves the actual
+        # WhispersOfJ casing, which isn't a valid image path component.
+        run: |
+          echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both needed for a genuine multi-platform build, not just cross-compiling metadata:
+      # QEMU actually emulates arm64 instructions on this amd64 runner so RUN steps execute for
+      # real (not just COPY/apk-add-of-noarch-packages), and the docker-container buildx driver
+      # (not the default `docker` driver) is required to produce a multi-platform manifest list
+      # at all - confirmed locally first (docker buildx build --platform linux/arm64, both this
+      # Dockerfile and control-panel's, verified the resulting images actually run under
+      # emulation, not just build) before wiring this into CI.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:v${{ steps.version.outputs.version }}

@@ -1,0 +1,65 @@
+name: Validate Compose
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create dummy .env
+        # docker compose config needs the vars referenced in compose to resolve
+        # (doesn't need real values - this just validates YAML/schema, not secrets).
+        run: cp .env.example .env
+
+      - name: Validate default profile
+        run: docker compose config --quiet
+
+      - name: Check every compose ${VAR} has a .env.example key
+        # docker compose config doesn't fail on an undefined var - it silently
+        # substitutes an empty string. This catches that class of bug directly
+        # (e.g. a new service added with a var never added to .env.example).
+        run: |
+          comm -23 \
+            <(grep -ohE '\$\{[A-Z_0-9]+' docker-compose.yml | sed 's/^\${//' | sort -u) \
+            <(grep -E '^[A-Z_0-9]+=' .env.example | cut -d= -f1 | sort -u) \
+            > missing_vars.txt
+          if [ -s missing_vars.txt ]; then
+            echo "Vars referenced in docker-compose.yml but missing from .env.example:"
+            cat missing_vars.txt
+            exit 1
+          fi
+
+      - name: Shellcheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          severity: warning
+          scandir: "."
+          ignore_paths: >-
+            config media usenet
+
+      - name: Ruff
+        # Whole tree, not just control-panel/app.py: the live backend is
+        # main.py plus core/, services/, and models/ (app.py was retired from
+        # the image CMD in the 2026-08-05 backend rewrite), so the old
+        # single-file scope left every current backend module unlinted.
+        run: |
+          pip install ruff==0.8.6
+          ruff check control-panel/ scripts/ tests/
+
+      - name: Unit tests
+        run: |
+          pip install -r control-panel/requirements.txt -r requirements-dev.txt
+          pytest
+
+      - name: Build installer image
+        # Build-only, no push (no registry credentials here) - just catches a
+        # broken Dockerfile/entrypoint before merge. Actual publish happens
+        # in publish-installer.yml on push to main.
+        run: docker build -t media-stack-installer:ci .

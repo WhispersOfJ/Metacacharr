@@ -1,0 +1,37 @@
+"""Notifications catalog entries."""
+
+CATALOG: list[dict] = [
+    {
+        "id": "notifiarr",
+        "name": "Notifiarr",
+        "category": "Notifications",
+        "pitch": "One client that every *arr app in this fleet reports to, fanning out to Discord/webhooks - replaces per-app notification config with one place to manage it.",
+        "image": "golift/notifiarr",
+        "tag": "latest",
+        "ports": {},
+        "volumes": {"catalog_notifiarr_data": {"bind": "/config", "mode": "rw"}},
+        "environment": {},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~55MB RAM",
+        "doc_url": "https://github.com/Notifiarr/notifiarr",
+        "caveat": "Needs each *arr app's URL + API key entered in its own config UI after install - not wired automatically by this installer.",
+    },
+    {
+        "id": "ntfy",
+        "name": "ntfy",
+        "category": "Notifications",
+        "pitch": "Push straight to your phone/desktop with a plain HTTP POST, no account or app-store dependency.",
+        "image": "binwiederhier/ntfy",
+        "tag": "latest",
+        "ports": {"80/tcp": 8093},
+        "volumes": {"catalog_ntfy_data": {"bind": "/var/lib/ntfy", "mode": "rw"}},
+        "environment": {},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~30MB RAM",
+        "doc_url": "https://github.com/binwiederhier/ntfy",
+        "caveat": None,
+        "command": ["serve"],
+    },
+]

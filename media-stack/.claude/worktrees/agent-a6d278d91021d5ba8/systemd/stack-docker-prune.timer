@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly docker prune (stopped containers, dangling images, build cache)
+
+[Timer]
+# Sunday, after the daily backup (03:30) and Watchtower's pull (04:00) so
+# it isn't racing image pulls that are about to become "in use" again.
+OnCalendar=Sun *-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,81 @@
+{
+  "quality_profiles": [
+    {
+      "name": "WEB-1080p",
+      "upgrade_allowed": true,
+      "cutoff": "WEBDL-1080p",
+      "items": [
+        "WEBDL-1080p",
+        "WEBRip-1080p",
+        "Bluray-1080p"
+      ],
+      "min_format_score": 0,
+      "cutoff_format_score": 10000
+    },
+    {
+      "name": "WEB-2160p",
+      "upgrade_allowed": true,
+      "cutoff": "WEBDL-2160p",
+      "items": [
+        "WEBDL-2160p",
+        "WEBRip-2160p",
+        "Bluray-2160p"
+      ],
+      "min_format_score": 0,
+      "cutoff_format_score": 10000
+    }
+  ],
+  "custom_formats": [
+    {
+      "name": "HDR10+",
+      "score": 30,
+      "note": "TRaSH-Guides trash_id 505d871304820ba7106b693be6fe4a9e (HDR group), HDR10+ spec only. Previously a placeholder {type,value} shape that Sonarr's API rejects (400: condition name(s) cannot be empty) - replaced with the real ReleaseTitleSpecification regex from config/recyclarr's vendored TRaSH-Guides JSON.",
+      "specifications": [
+        {"name": "HDR10+", "implementation": "ReleaseTitleSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "\\b(HDR10(?=[+]|P(lus)?))"}]}
+      ]
+    },
+    {
+      "name": "Repack/Proper",
+      "score": 5,
+      "note": "TRaSH-Guides trash_id ec8fa7296b64e8cd390a1600981f3923. Previously a placeholder {type,value} shape - replaced with the real ReleaseTitleSpecification pair.",
+      "specifications": [
+        {"name": "Repack/Proper/Rerip", "implementation": "ReleaseTitleSpecification", "negate": false, "required": true, "fields": [{"name": "value", "value": "\\b(Repack|Proper|Rerip)\\b"}]},
+        {"name": "Not Higher Version Repack/Proper", "implementation": "ReleaseTitleSpecification", "negate": true, "required": true, "fields": [{"name": "value", "value": "\\b((repack|proper)[23])\\b|\\bREAL\\.(REAL\\.)?(PROPER|REPACK)\\b"}]}
+      ]
+    },
+    {
+      "name": "x265 (HD)",
+      "score": -1000,
+      "note": "TRaSH-Guides trash_id 47435ece6b99a0b477caf360e79ba0bb. Previously a placeholder {type,value} shape referencing a non-existent 'codec'/'resolution' spec type with a string value ('1080p') - Sonarr's ResolutionSpecification takes an integer. Replaced with the real ReleaseTitleSpecification/ResolutionSpecification pair.",
+      "specifications": [
+        {"name": "x265/HEVC", "implementation": "ReleaseTitleSpecification", "negate": false, "required": true, "fields": [{"name": "value", "value": "[xh][ ._-]?265|\\bHEVC(\\b|\\d)"}]},
+        {"name": "Not 2160p", "implementation": "ResolutionSpecification", "negate": true, "required": true, "fields": [{"name": "value", "value": 2160}]}
+      ]
+    },
+    {
+      "name": "Anime Dual Audio",
+      "score": 20,
+      "note": "TRaSH-Guides trash_id 418f50b10f1907201b6cfdf881f467b7. Previously a placeholder {type,value} shape matching only the bare word 'dual' - replaced with the real regex/language spec set.",
+      "specifications": [
+        {"name": "Dual Audio", "implementation": "ReleaseTitleSpecification", "negate": false, "required": true, "fields": [{"name": "value", "value": "dual[ ._-]?(audio)|[([]dual[])]|\\b(JA|ZH|KO)(?= ?\\+ ?.*?\\b(EN))|\\b(EN)(?= ?\\+ ?.*?\\b(JA|ZH|KO))|\\b(Japanese|Chinese|Korean) ?[ ._\\+&-] ?\\b(English)|\\b(English) ?[ ._\\+&-] ?\\b(Japanese|Chinese|Korean)|\\b(\\d{3,4}(p|i)|4K|U(ltra)?HD)\\b.*\\b(DUAL)\\b(?!.*\\(|\\))"}]},
+        {"name": "Not Single Language Only", "implementation": "ReleaseTitleSpecification", "negate": true, "required": true, "fields": [{"name": "value", "value": "\\[(JA|ZH|KO)\\]"}]},
+        {"name": "Japanese Language", "implementation": "LanguageSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 8}]},
+        {"name": "Chinese Language", "implementation": "LanguageSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 10}]},
+        {"name": "Korean Language", "implementation": "LanguageSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 21}]}
+      ]
+    },
+    {
+      "name": "Blocklist: Unwanted Groups/Sources, RU-CN Audio, Blu-ray",
+      "score": -10000,
+      "note": "Applied live to Sonarr on 2026-07-13, id=1, score set on every quality profile. Uses real Sonarr customformat API specification shape (implementation/fields), unlike the placeholder entries above. Sonarr splits Blu-ray into two source values (Bluray=6, BlurayRaw=7), unlike Radarr's single BLURAY=9.",
+      "specifications": [
+        {"name": "Unwanted release groups/sources (user regex)", "implementation": "ReleaseTitleSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "(?i)\\b(WEB-DL|WEBRip|BDRip|HDRip|DVDRip|HDTV|AMZN|NF|DSNP|CR|YTS|TGX|TorrentGalaxy|FGT|LOL|KILLERS|EPSiLON|Erai-raws)\\b|rartv|rarbg|eztv"}]},
+        {"name": "Blu-ray filename patterns", "implementation": "ReleaseTitleSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": "(?i)\\b(BluRay|Blu-Ray|BDRemux|BR-?Remux|BDMV|BD25|BD50|BD66|BD100|COMPLETE\\.BLURAY|BR-?DISK)\\b"}]},
+        {"name": "Russian language", "implementation": "LanguageSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 11}, {"name": "exceptLanguage", "value": false}]},
+        {"name": "Chinese language", "implementation": "LanguageSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 10}, {"name": "exceptLanguage", "value": false}]},
+        {"name": "Blu-ray source", "implementation": "SourceSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 6}]},
+        {"name": "Blu-ray raw source", "implementation": "SourceSpecification", "negate": false, "required": false, "fields": [{"name": "value", "value": 7}]}
+      ]
+    }
+  ]
+}

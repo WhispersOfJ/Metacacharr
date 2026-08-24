@@ -1,0 +1,11 @@
+# This Dockerfile only ever COPYs docker-compose.yml, .env.example, the docs,
+# scripts/, and systemd/ - everything else is excluded from the build
+# context entirely. Keeps the build fast and avoids Docker choking on
+# root-owned runtime files under config/ (created by containers, some with
+# permissions the build user can't even stat).
+.git
+config/
+media/
+usenet/
+.env
+*.log

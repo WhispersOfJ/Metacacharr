@@ -1,0 +1,9 @@
+[Unit]
+Description=Plex library added/removed report (Discord)
+After=media-stack.service
+OnFailure=notify-failure@%n.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/bear/Claude/media-stack
+ExecStart=/usr/bin/python3 /home/bear/Claude/media-stack/scripts/plex-library-report.py

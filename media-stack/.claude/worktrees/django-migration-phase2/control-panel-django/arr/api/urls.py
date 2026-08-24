@@ -1,0 +1,65 @@
+from django.urls import path
+
+from arr.api.views import (
+    BacklogStatusView,
+    BlocklistClearView,
+    BlocklistView,
+    CommandBacklogView,
+    CommandQueueSummaryView,
+    CustomformatSnapshotView,
+    CutoffUnmetView,
+    ImportListAddView,
+    ImportListImplementationsView,
+    ImportListsView,
+    ImportStarvationView,
+    LogsView,
+    LoopCandidatesView,
+    ManualImportAllView,
+    ManualImportView,
+    MissingAiredView,
+    QueueAutofixView,
+    QueueErrorsView,
+    RecentlyAddedView,
+    RssSyncView,
+    SearchMissingView,
+    SearchStatusView,
+    SearchToggleView,
+    UnmonitorView,
+    UnstickImportingView,
+    UnstickView,
+)
+
+app_name = "arr_api"
+
+# 22 routes carry a <str:app_name> segment; the 5 aggregation routes
+# (import-starvation, queue-autofix, backlog-status, command-queue-summary,
+# queue-errors) are app-agnostic and mounted without it. ManualImportView
+# handles both GET (candidates) and POST (execute) on one URL.
+urlpatterns = [
+    path("<str:app_name>/rss-sync", RssSyncView.as_view(), name="rss_sync"),
+    path("<str:app_name>/search-missing", SearchMissingView.as_view(), name="search_missing"),
+    path("<str:app_name>/search-status", SearchStatusView.as_view(), name="search_status"),
+    path("<str:app_name>/search-toggle", SearchToggleView.as_view(), name="search_toggle"),
+    path("<str:app_name>/command-backlog", CommandBacklogView.as_view(), name="command_backlog"),
+    path("<str:app_name>/unstick", UnstickView.as_view(), name="unstick"),
+    path("<str:app_name>/unstick-importing", UnstickImportingView.as_view(), name="unstick_importing"),
+    path("import-starvation", ImportStarvationView.as_view(), name="import_starvation"),
+    path("queue-autofix", QueueAutofixView.as_view(), name="queue_autofix"),
+    path("<str:app_name>/loop-candidates", LoopCandidatesView.as_view(), name="loop_candidates"),
+    path("<str:app_name>/unmonitor", UnmonitorView.as_view(), name="unmonitor"),
+    path("<str:app_name>/manual-import", ManualImportView.as_view(), name="manual_import"),
+    path("<str:app_name>/manual-import-all", ManualImportAllView.as_view(), name="manual_import_all"),
+    path("<str:app_name>/missing-aired", MissingAiredView.as_view(), name="missing_aired"),
+    path("<str:app_name>/blocklist", BlocklistView.as_view(), name="blocklist"),
+    path("<str:app_name>/blocklist/clear", BlocklistClearView.as_view(), name="blocklist_clear"),
+    path("backlog-status", BacklogStatusView.as_view(), name="backlog_status"),
+    path("<str:app_name>/logs", LogsView.as_view(), name="logs"),
+    path("command-queue-summary", CommandQueueSummaryView.as_view(), name="command_queue_summary"),
+    path("<str:app_name>/recently-added", RecentlyAddedView.as_view(), name="recently_added"),
+    path("queue-errors", QueueErrorsView.as_view(), name="queue_errors"),
+    path("<str:app_name>/cutoff-unmet", CutoffUnmetView.as_view(), name="cutoff_unmet"),
+    path("<str:app_name>/import-lists", ImportListsView.as_view(), name="import_lists"),
+    path("<str:app_name>/import-list/implementations", ImportListImplementationsView.as_view(), name="import_list_implementations"),
+    path("<str:app_name>/import-list/add", ImportListAddView.as_view(), name="import_list_add"),
+    path("<str:app_name>/customformat-snapshot", CustomformatSnapshotView.as_view(), name="customformat_snapshot"),
+]

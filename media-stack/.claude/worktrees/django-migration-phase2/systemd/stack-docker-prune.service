@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly cleanup of stopped containers, dangling images, and build cache
+After=media-stack.service
+# Same defense-in-depth as the other stack-*.service units.
+OnFailure=notify-failure@%n.service
+
+[Service]
+Type=oneshot
+# Deliberately not `docker system prune --volumes` - this stack uses bind
+# mounts (./config, ./media) not named volumes, so there's nothing safe to
+# gain there and --volumes is one flag away from removing something in use.
+ExecStart=/usr/bin/docker container prune -f
+ExecStart=/usr/bin/docker image prune -f
+ExecStart=/usr/bin/docker builder prune -f

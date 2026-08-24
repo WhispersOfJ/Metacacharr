@@ -1,0 +1,74 @@
+version: 2
+
+# ghcr-zurg: debridmediamanager/zurg is a sponsor-gated GHCR image (see docker-compose.yml's
+# own comment on it, not the public zurg-testing image) - Dependabot can't even check it for
+# updates without a credential that has sponsor access, otherwise every docker-compose update
+# run fails outright with private_source_authentication_failure (see CHANGELOG v6.0.1).
+# DEPENDABOT_GHCR_TOKEN is a classic PAT (read:packages only) set in the Dependabot secrets
+# store specifically (Settings -> Secrets and variables -> Dependabot), not the Actions store -
+# the two are separate and Dependabot's own update jobs only read from the former.
+registries:
+  ghcr-zurg:
+    type: docker-registry
+    url: ghcr.io
+    username: WhispersOfJ
+    password: ${{secrets.DEPENDABOT_GHCR_TOKEN}}
+
+updates:
+  # Checks docker-compose.yml for newer image tags/digests and opens a PR when
+  # found. Every service is pinned now (v2.11.0) - channel tags (:release),
+  # version tags, or exact digests - so this actually has something to bump
+  # for all 22 services, not just the few that used to have real version
+  # pins. Digest-pinned images (see README's Image pinning policy) won't get
+  # PRs the same way channel/version tags do - Dependabot can't tell a
+  # digest "should" change, only that a newer one exists for a tag it's
+  # already watching.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    registries:
+      - ghcr-zurg
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "docker"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # Watches the installer image's own Dockerfile (alpine base) - separate
+  # from the docker-compose ecosystem above since Dependabot treats
+  # Dockerfiles and compose files as distinct ecosystems.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "docker"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # Control Panel's pinned Python deps (control-panel/requirements.txt) - nothing
+  # was bumping these before. scripts/*.py are stdlib-only, no requirements file
+  # there, so this is the only pip ecosystem needed.
+  - package-ecosystem: "pip"
+    directory: "/control-panel"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "python"
+    labels:
+      - "dependencies"
+      - "python"
+
+  # Pins the Actions themselves (actions/checkout@v4, etc.) across every
+  # workflow in .github/workflows/ - previously nothing bumped these either.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"

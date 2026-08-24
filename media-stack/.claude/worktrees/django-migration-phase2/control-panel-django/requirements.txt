@@ -1,0 +1,10 @@
+Django==5.2.17
+djangorestframework==3.16.1
+argon2-cffi==25.1.0
+docker==7.2.0
+httpx==0.28.1
+pytest==9.1.1
+pytest-django==4.9.0
+pytest-cov==6.0.0
+pytest-httpx==0.35.0
+pillow==12.3.0

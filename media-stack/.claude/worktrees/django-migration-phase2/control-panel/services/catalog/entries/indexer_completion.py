@@ -1,0 +1,36 @@
+"""Indexer & library completion catalog entries."""
+
+CATALOG: list[dict] = [
+    {
+        "id": "flaresolverr",
+        "name": "FlareSolverr",
+        "category": "Indexer & library completion",
+        "pitch": "Solves Cloudflare challenges Prowlarr can't get through directly - wires in as a Prowlarr indexer proxy.",
+        "image": "ghcr.io/flaresolverr/flaresolverr",
+        "tag": "latest",
+        "ports": {"8191/tcp": 8191},
+        "volumes": {},
+        "environment": {"LOG_LEVEL": "info"},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~180MB RAM (headless browser)",
+        "doc_url": "https://github.com/FlareSolverr/FlareSolverr",
+        "caveat": "After install, add it as a proxy in Prowlarr's Settings -> Indexers manually - not auto-wired.",
+    },
+    {
+        "id": "recyclarr",
+        "name": "Recyclarr",
+        "category": "Indexer & library completion",
+        "pitch": "Continuously syncs TRaSH-Guides quality profiles and custom formats into Radarr/Sonarr - automates what the trash-guides-applier skill does by hand.",
+        "image": "ghcr.io/recyclarr/recyclarr",
+        "tag": "8",
+        "ports": {},
+        "volumes": {"catalog_recyclarr_data": {"bind": "/config", "mode": "rw"}},
+        "environment": {},
+        "cap_add": [],
+        "devices": [],
+        "footprint": "~20MB RAM (scheduled run, no persistent server)",
+        "doc_url": "https://github.com/recyclarr/recyclarr",
+        "caveat": "Tag pinned to major version 8 on purpose - the :latest tag is no longer published upstream.",
+    },
+]

@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Control Panel — The Stack</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%232c1b13'/%3E%3Crect x='4' y='4' width='8' height='8' fill='%238c1d2b'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div class="brand-text">
+      <span class="brand-title">Control Panel</span>
+      <span class="brand-sub">The Stack</span>
+    </div>
+  </div>
+  <button class="palette-hint" id="palette-open" type="button">
+    <span class="kbd">Ctrl</span><span class="kbd">K</span>
+    <span>Run a command…</span>
+  </button>
+  <div class="stampgrid">
+    <div><span class="label">Sheet</span><span class="val">1 of 1</span></div>
+    <div><span class="label">Rev</span><span class="val">D</span></div>
+    <div><span class="label">Drawn</span><span class="val">Control Panel</span></div>
+  </div>
+  <div class="hud">
+    <span class="dot" id="hud-conn-dot"></span>
+    <span id="hud-conn-label">connecting…</span>
+    <span class="hud-sep">·</span>
+    <span id="clock" aria-live="off"></span>
+    <span class="hud-sep">·</span>
+    <span id="uptime"></span>
+    <span class="hud-sep">·</span>
+    <label class="switch" title="Toggle amber/green Pip-Boy palette">
+      <input type="checkbox" id="theme-switch">
+      <span class="switch-track"></span>
+      <span class="switch-label">Amber</span>
+    </label>
+    <button class="btn-ghost" id="console-toggle" type="button">Console</button>
+    <button class="btn-ghost" id="logout-btn" type="button">Log out</button>
+  </div>
+</header>
+
+<div id="login-overlay" hidden>
+  <form id="login-form">
+    <h2>Control Panel</h2>
+    <p class="hint">Sign in to continue.</p>
+    <label>Username
+      <input type="text" id="login-username" autocomplete="username" required>
+    </label>
+    <label>Password
+      <input type="password" id="login-password" autocomplete="current-password" required>
+    </label>
+    <button class="btn-primary" type="submit">Log in</button>
+    <p id="login-error" role="alert"></p>
+  </form>
+</div>
+
+<div id="workspace">
+
+  <div id="col-main">
+
+    <section class="rail" id="rail-poster-sync" data-rail-accent="poster-sync" aria-labelledby="h-poster-sync">
+      <h2 id="h-poster-sync">Poster Sync</h2>
+      <form class="poster-sync-form" id="poster-sync-form">
+        <label>Library
+          <select id="poster-sync-library"><option value="">Loading libraries…</option></select>
+        </label>
+        <label>Source
+          <select id="poster-sync-source">
+            <option value="tmdb">TMDb</option>
+            <option value="fanart">Fanart.tv</option>
+            <option value="tvdb">TheTVDB</option>
+            <option value="omdb">OMDb</option>
+            <option value="tvmaze">TVmaze (shows only)</option>
+          </select>
+        </label>
+        <label>Mode
+          <select id="poster-sync-mode">
+            <option value="auto">Auto (apply top match)</option>
+            <option value="review">Review (pick top 3 per item)</option>
+            <option value="gallery">Gallery (browse + quality scan)</option>
+          </select>
+        </label>
+        <label class="poster-sync-check" id="poster-sync-dry-run-wrap">
+          <input type="checkbox" id="poster-sync-dry-run">
+          Dry run
+        </label>
+        <button class="btn-primary" type="submit">Start</button>
+        <span class="hint" id="poster-sync-summary"></span>
+      </form>
+      <pre id="poster-log"></pre>
+      <div class="poster-review-grid" id="poster-review-grid" hidden></div>
+      <div class="poster-gallery" id="poster-gallery" hidden>
+        <div class="poster-gallery-toolbar">
+          <button class="btn-ghost" type="button" id="poster-gallery-scan">Run quality scan</button>
+          <span class="hint" id="poster-gallery-scan-summary"></span>
+        </div>
+        <div class="poster-gallery-grid" id="poster-gallery-grid"></div>
+        <div class="poster-gallery-pager">
+          <button class="btn-ghost" type="button" id="poster-gallery-prev">&larr; Prev</button>
+          <span class="hint" id="poster-gallery-page-info"></span>
+          <button class="btn-ghost" type="button" id="poster-gallery-next">Next &rarr;</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="rail" id="rail-plex-health" data-rail-accent="plex-health" aria-labelledby="h-plex-health">
+      <h2 id="h-plex-health">Plex Health <span class="rail-hint">live scan status — see CLAUDE.md's landmines for the two hang classes this detects</span></h2>
+      <div class="vitals-row">
+        <div class="vital">
+          <span class="vital-label">State</span>
+          <span class="vital-value" id="plex-health-state">—</span>
+          <span class="vital-sub" id="plex-health-state-sub"></span>
+        </div>
+        <div class="vital">
+          <span class="vital-label">Scan progress</span>
+          <span class="vital-value" id="plex-health-progress">—</span>
+          <span class="vital-sub" id="plex-health-progress-sub"></span>
+        </div>
+        <div class="vital">
+          <span class="vital-label">NzbDAV queue</span>
+          <span class="vital-value" id="plex-health-queue">—</span>
+          <span class="vital-sub" id="plex-health-queue-sub"></span>
+        </div>
+        <div class="vital">
+          <span class="vital-label">Restarts</span>
+          <span class="vital-value" id="plex-health-restarts">—</span>
+          <span class="vital-sub" id="plex-health-restarts-sub"></span>
+        </div>
+      </div>
+
+      <h3 class="rail-sub">History <span class="rail-hint">last ~15 min, this session only</span></h3>
+      <div class="sparkline-row">
+        <div class="sparkline-block">
+          <span class="sparkline-label">Scan progress %</span>
+          <svg class="sparkline" id="spark-progress" viewBox="0 0 200 40" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="sparkline-block">
+          <span class="sparkline-label">Busy-database errors</span>
+          <svg class="sparkline" id="spark-busydb" viewBox="0 0 200 40" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+
+      <h3 class="rail-sub">Recent Plex log</h3>
+      <pre class="log-block" id="plex-health-log"></pre>
+
+      <h3 class="rail-sub">Mitigations</h3>
+      <div class="rule-list" id="plex-health-actions"></div>
+    </section>
+
+    <section class="rail" id="rail-overview" data-rail-accent="overview" aria-labelledby="h-overview">
+      <h2 id="h-overview">Overview</h2>
+      <div class="vitals-row">
+        <div class="vital">
+          <span class="vital-label">Containers</span>
+          <span class="vital-value" id="stat-containers-value">—</span>
+          <span class="vital-sub" id="stat-containers-sub"></span>
+        </div>
+        <div class="vital vital-wide">
+          <span class="vital-label">Plex</span>
+          <span class="vital-value" id="stat-plex-value">—</span>
+          <span class="vital-sub" id="stat-plex-sub"></span>
+          <button class="btn-ghost vital-btn" id="plex-check-updates" type="button">Check for updates</button>
+        </div>
+      </div>
+      <div class="rule-list" id="primary-actions"></div>
+    </section>
+
+    <section class="rail" id="rail-fleet" data-rail-accent="fleet" aria-labelledby="h-fleet">
+      <h2 id="h-fleet">Fleet <span class="rail-hint">grouped by subsystem — live from Docker, click a row to tail it</span></h2>
+      <div id="fleet-groups"></div>
+
+      <h3 class="rail-sub">Radarr / Sonarr — actions</h3>
+      <div id="arr-fleet"></div>
+
+      <h3 class="rail-sub">Loop remediation <span class="rail-hint">manual unmonitor/exclude for titles looping in the queue-autofix history</span></h3>
+      <div id="loop-remediation"></div>
+
+      <h3 class="rail-sub">Letterboxd <span class="rail-hint">tracked lists for nightly diff-only sync, plus recent sync history</span></h3>
+      <div id="letterboxd-panel"></div>
+    </section>
+
+    <section class="rail two-lane" id="rail-host" data-rail-accent="host" aria-labelledby="h-host">
+      <h2 id="h-host">Host</h2>
+      <h3 class="rail-sub">Live resources</h3>
+      <div id="host-resources"></div>
+      <div class="lane-grid">
+        <div class="lane">
+          <h3 class="lane-title">Vitals <span class="lane-tag">read-only</span></h3>
+          <div class="rule-list" id="host-vitals"></div>
+        </div>
+        <div class="lane lane-actions">
+          <h3 class="lane-title">Fleet-wide actions</h3>
+          <div class="rule-list" id="host-actions"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="rail" id="rail-reference" data-rail-accent="reference" aria-labelledby="h-reference">
+      <h2 id="h-reference">Reference</h2>
+
+      <h3 class="rail-sub">Open a service</h3>
+      <div class="quicklinks" id="quicklinks"></div>
+
+      <h3 class="rail-sub">Documentation</h3>
+      <div class="rule-list" id="doc-links"></div>
+      <div class="readme-panel" id="readme-panel" hidden>
+        <div class="readme-panel-head">
+          <span>This stack's README.md</span>
+          <button class="btn-ghost" id="readme-close" type="button">Close</button>
+        </div>
+        <pre id="readme-body"></pre>
+      </div>
+
+      <h3 class="rail-sub">Claude Code skills <span class="rail-hint">reference only — these run in Claude Code, not in this app</span></h3>
+      <div class="rule-list" id="skills-list"></div>
+    </section>
+
+  </div>
+
+  <aside id="col-log" aria-labelledby="h-log">
+    <div class="log-head">
+      <h2 id="h-log">Log console</h2>
+      <select id="log-source" aria-label="Log source"><option value="">Select a source…</option></select>
+      <button class="btn-icon" id="log-clear" type="button" title="Clear">✕</button>
+      <button class="btn-ghost" id="log-close" type="button">Close</button>
+    </div>
+    <pre id="log-lines"><span class="log-empty">Select a container above, or run a command from the palette — its log will stream here.</span></pre>
+    <div class="activity-head">Recent activity</div>
+    <div class="activity-body" id="log-body"></div>
+  </aside>
+
+</div>
+
+<div id="palette-overlay" hidden>
+  <div id="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+
+    <section id="screen-list" class="palette-screen">
+      <div class="palette-prompt">
+        <span class="caret">&gt;</span>
+        <input id="console-filter" type="text" placeholder="search operations..." aria-label="Search operations" autocomplete="off">
+        <button class="btn-ghost palette-close" data-close type="button">Esc</button>
+      </div>
+      <p class="palette-hint-line" id="console-status">loading manifest…</p>
+      <ul id="command-list"></ul>
+    </section>
+
+    <section id="screen-args" class="palette-screen" hidden>
+      <button class="palette-back" data-back="list">&larr; Abort</button>
+      <h3 class="palette-title" id="args-title"></h3>
+      <p class="palette-desc" id="args-desc"></p>
+      <form id="args-form"></form>
+    </section>
+
+    <section id="screen-confirm" class="palette-screen palette-alert" hidden>
+      <button class="palette-back" data-back="args">&larr; Abort</button>
+      <p class="confirm-warning">destructive operation — cannot be undone from here</p>
+      <p class="confirm-text-line" id="confirm-text"></p>
+      <p class="confirm-hint" id="confirm-hint">type the command name below to authorize execution</p>
+      <input id="confirm-input" type="text" aria-label="Command name to confirm" aria-describedby="confirm-hint" autocomplete="off" spellcheck="false">
+      <div class="palette-row">
+        <button id="confirm-yes" class="btn-danger" disabled type="button">Execute</button>
+        <button id="confirm-no" class="btn-ghost" type="button">Cancel</button>
+      </div>
+    </section>
+
+    <section id="screen-run" class="palette-screen" hidden>
+      <button class="palette-back" data-back="list">&larr; New operation</button>
+      <h3 class="palette-title" id="run-title"></h3>
+      <div id="run-status"></div>
+      <pre id="result-pane"></pre>
+    </section>
+
+  </div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
