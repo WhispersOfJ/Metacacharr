@@ -57,17 +57,25 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
+          # Only GHCR-tagged images are pushed — a bare tag like metacache:ci
+          # would resolve to Docker Hub and fail the push (401, no credentials).
           push: ${{ github.event_name != 'pull_request' }}
           load: true # also load locally so Trivy can scan the exact image
-          tags: ${{ steps.meta.outputs.tags }},metacache:ci
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           # Cache writes need a write token — PRs (incl. Dependabot's read-only
           # token) restore from the cache but don't write; pushes/schedule do.
           cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
+
+      - name: Tag image for scanning (local ref, never pushed)
+        run: |
+          first_tag=$(echo "${{ steps.meta.outputs.tags }}" | cut -d, -f1)
+          docker tag "$first_tag" metacache:ci
 
       - name: Cache Trivy vulnerability DB
         uses: actions/cache@v4
@@ -78,6 +86,7 @@ jobs:
       - name: Trivy — image CVE scan (gate)
         # Fails the run on HIGH/CRITICAL fixable CVEs in the image (base image +
         # published app); SARIF still uploads for code scanning on a failure.
+        id: trivy-image
         run: |
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
@@ -94,6 +103,7 @@ jobs:
 
       - name: Trivy — IaC/config scan (Dockerfile, compose)
         # Misconfiguration gate: non-root USER, secret baking, etc. (AVD rules).
+        id: trivy-config
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
@@ -107,6 +117,7 @@ jobs:
             .
 
       - name: Trivy — pinned monitoring images scan (gate)
+        id: trivy-images
         # Scans every third-party image pinned in monitoring/docker-compose.yml
         # (the metacache service has no image: — it builds). Dependabot bumps
         # these pins, so every PR re-scans the proposed version against the
@@ -144,21 +155,23 @@ jobs:
           exit $failed
 
       - name: Upload Trivy SARIF (image)
-        # Dependabot PRs run with a read-only token (no security-events write), so
-        # SARIF upload would 403 — skip it there; the Trivy gates above still run.
-        if: always() && github.actor != 'dependabot[bot]'
+        # Uploads run on success AND failure (findings gate) so the SARIF always
+        # lands in code scanning, but skip when the scan itself was skipped (e.g.
+        # an earlier step failed) — no files exist then. Dependabot PRs run with a
+        # read-only token, so skip there too.
+        if: always() && github.actor != 'dependabot[bot]' && steps.trivy-image.outcome != 'skipped'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image.sarif
 
       - name: Upload Trivy SARIF (config)
-        if: always() && github.actor != 'dependabot[bot]'
+        if: always() && github.actor != 'dependabot[bot]' && steps.trivy-config.outcome != 'skipped'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-config.sarif
 
       - name: Upload Trivy SARIF (monitoring images)
-        if: always() && github.actor != 'dependabot[bot]'
+        if: always() && github.actor != 'dependabot[bot]' && steps.trivy-images.outcome != 'skipped'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: sarif # directory of per-image SARIF files
