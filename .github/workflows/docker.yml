@@ -29,6 +29,7 @@ jobs:
       contents: read
       packages: write # GHCR push
       security-events: write # SARIF upload to code scanning
+      actions: read # upload-sarif queries the workflow run to attach SARIF
     steps:
       - name: Checkout
         uses: actions/checkout@v4
