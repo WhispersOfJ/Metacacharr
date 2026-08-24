@@ -432,7 +432,7 @@ Plex changes the API (it will — it's brand new), you change one folder.
 - **M1 — Movies:** match + metadata for movie libraries; GUIDs; image rewriting through
   the local endpoint; SQLite cache with TTL + ETag revalidation; 404/400 semantics.
   *DoD:* create a movie library using the provider; "Fix Match" finds films; refresh
-  shows two upstream calls total.
+  shows two upstream calls total. **Shipped** — see §16.
 - **M2 — TV:** shows/seasons/episodes; `/children` + `/grandchildren` with paging;
   episode matching by index and air date; localization (X-Plex-Language); content
   ratings by country; alternate episode orders. *DoD:* a TV library works end to end
@@ -575,3 +575,44 @@ filtering, thresholds and manual/auto shaping are shared with movie matching.
 **Shipped:** the engine (`MatchHint` with `MatchKind`, `MatchCandidate` with TV fields,
 `MatchScorer` dispatch, `TitleNormalizer`, `FilenameParser` with SxxEyy/`Season N`,
 `MatchPolicy` TV weights) with unit tests — see `tests/…/Matching/`.
+
+---
+
+## 16. M1 — movies shipped (implementation notes)
+
+M1 lands the full movie loop: Plex match → ranked result → metadata → local artwork,
+with every TMDB call behind the cache. Notes on the choices made:
+
+**TMDB auth is header-based.** The API key (API Read Access Token) is sent as
+`Authorization: Bearer` (TMDB v3 accepts it there), so URLs, cache keys and logs never
+contain the secret. This required a small, general extension to the cache gateway:
+`UpstreamRequest` now carries optional per-request headers, forwarded by
+`HttpUpstreamClient` — the ARR proxy face (M4) will reuse this for Sonarr/Radarr
+header keys.
+
+**M1 uses the raw-HTTP cache layer** (`UpstreamCache`) for all TMDB JSON — search/find
+12 h TTL, movie details 24 h — which already delivers single-flight, ETag
+revalidation, stale-if-error and per-language keys (the URL carries `language`). The
+normalized `items` store (`MetadataCache`) is exercised starting in M2, where TV
+season/episode structures need indexable rows; movies are fully served by the raw
+layer. A match is search + one details call (the enriched winner); a guid-pinned match
+is find + one details call; a manual search enriches the top 8 candidates in parallel.
+
+**Artwork is fully local.** `MovieMapper` rewrites every TMDB poster/backdrop URL to
+`/img/{sha256}` via `ImageCache.RewriteToLocalPath`; Plex pulls art from Metacache and
+`/img` fetches+stores on first request (self-healing). Match items carry a rewritten
+`thumb` too, so even the Fix Match dialog never touches the internet.
+
+**Schema quirk handled:** Plex's metadata object legitimately has both `guid` (string)
+and `Guid` (array) — plus `studio`/`Studio`. System.Text.Json's default
+case-insensitive conflict check rejects those pairs, so provider responses serialize
+with `PropertyNameCaseInsensitive = false` (`ProviderJson`); every property name is
+pinned by an explicit attribute, so nothing else changes.
+
+**Deferred to M2 (kept the wire models ready):** cast/crew (`Role`/`Director`/
+`Producer`/`Writer`), certifications/`contentRating` (needs the release-dates call +
+`X-Plex-Country`), `Collection[]` (needs the collection feature + collections
+endpoint), `Network[]`, `SeasonType[]`, alternate episode orders, and response-
+customization params (`includeFields`/`excludeElements`). M1 serves `Guid[]`,
+`Genre[]`, `Image[]`, `Rating[]` (TMDB vote), `Country[]`, `Studio[]`, tagline,
+summary, duration and year — the fields Plex needs for a complete movie library.

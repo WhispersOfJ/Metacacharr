@@ -9,7 +9,8 @@ public interface IUpstreamHttp
 public sealed record UpstreamRequest(
     Uri Url,
     string? IfNoneMatch = null,
-    DateTimeOffset? IfModifiedSince = null);
+    DateTimeOffset? IfModifiedSince = null,
+    IReadOnlyDictionary<string, string>? Headers = null);
 
 public sealed record UpstreamResponse(
     int StatusCode,

@@ -20,6 +20,11 @@ public sealed class HttpUpstreamClient : IUpstreamHttp, IDisposable
             message.Headers.TryAddWithoutValidation("If-None-Match", request.IfNoneMatch);
         if (request.IfModifiedSince is { } modified)
             message.Headers.IfModifiedSince = modified;
+        if (request.Headers is not null)
+        {
+            foreach (var (name, value) in request.Headers)
+                message.Headers.TryAddWithoutValidation(name, value);
+        }
 
         using var response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);

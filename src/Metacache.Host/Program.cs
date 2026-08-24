@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.HttpLogging;
 using Metacache.Core.Cache;
 using Metacache.Core.Matching;
+using Metacache.Core.Providers;
 using Metacache.Host;
 using Metacache.Plex;
 
@@ -31,6 +32,16 @@ var cacheOptions = new CacheOptions(
     MaxImageTotalBytes: imagesSection.GetValue<long?>("MaxTotalBytes") ?? 10L * 1024 * 1024 * 1024);
 builder.Services.AddMetacacheCache(cacheOptions);
 builder.Services.AddMetacacheMatching(builder.Configuration);
+
+// TMDB client (Bearer-auth header, so the API key never appears in URLs/cache keys)
+// and the provider services that answer Plex match/metadata requests (M1: movies).
+var tmdbSection = builder.Configuration.GetSection("Metacache:Tmdb");
+var tmdbOptions = new TmdbOptions(
+    ApiKey: tmdbSection["ApiKey"] ?? "",
+    BaseUrl: tmdbSection["BaseUrl"] ?? "https://api.themoviedb.org/3",
+    ImageBaseUrl: tmdbSection["ImageBaseUrl"] ?? "https://image.tmdb.org/t/p/original");
+builder.Services.AddTmdbClient(tmdbOptions);
+builder.Services.AddMetacachePlexProviders();
 
 builder.Services.AddHttpLogging(o =>
 {

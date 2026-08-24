@@ -42,17 +42,21 @@ public sealed class UpstreamCache
         return Convert.ToHexStringLower(hash);
     }
 
-    public async Task<CachedResponse> GetOrFetchAsync(string url, CachePolicy policy, CancellationToken cancellationToken = default)
+    public async Task<CachedResponse> GetOrFetchAsync(
+        string url,
+        CachePolicy policy,
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, string>? headers = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(url);
         cancellationToken.ThrowIfCancellationRequested();
 
         string key = ComputeKey(url);
-        Task<CachedResponse> task = _flight.RunAsync(key, () => FetchCoreAsync(key, url, policy));
+        Task<CachedResponse> task = _flight.RunAsync(key, () => FetchCoreAsync(key, url, policy, headers));
         return await task.ConfigureAwait(false);
     }
 
-    private async Task<CachedResponse> FetchCoreAsync(string key, string url, CachePolicy policy)
+    private async Task<CachedResponse> FetchCoreAsync(string key, string url, CachePolicy policy, IReadOnlyDictionary<string, string>? headers)
     {
         CachedUpstreamRow? cached = _store.GetUpstream(key);
         DateTimeOffset now = _clock.UtcNow;
@@ -68,7 +72,7 @@ public sealed class UpstreamCache
             // Stale → revalidate with a conditional request.
             try
             {
-                var request = new UpstreamRequest(new Uri(url), cached.ETag, cached.LastModified);
+                var request = new UpstreamRequest(new Uri(url), cached.ETag, cached.LastModified, headers);
                 var upstream = await _upstream.SendAsync(request, CancellationToken.None).ConfigureAwait(false);
                 return HandleUpstreamResponse(upstream, key, url, cached, policy, now);
             }
@@ -83,7 +87,7 @@ public sealed class UpstreamCache
         // Cold miss.
         try
         {
-            var upstream = await _upstream.SendAsync(new UpstreamRequest(new Uri(url)), CancellationToken.None).ConfigureAwait(false);
+            var upstream = await _upstream.SendAsync(new UpstreamRequest(new Uri(url), Headers: headers), CancellationToken.None).ConfigureAwait(false);
             return HandleUpstreamResponse(upstream, key, url, cached: null, policy, now);
         }
         catch (HttpRequestException ex)

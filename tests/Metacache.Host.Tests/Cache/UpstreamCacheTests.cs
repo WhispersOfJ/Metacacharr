@@ -252,6 +252,24 @@ public class UpstreamCacheTests
     }
 
     [Fact]
+    public async Task Extra_headers_are_forwarded_to_upstream()
+    {
+        using var f = new Fixture();
+        var headers = new Dictionary<string, string> { ["Authorization"] = "Bearer secret-key" };
+        f.Upstream.Handler = request =>
+        {
+            Assert.Equal("Bearer secret-key", request.Headers!["Authorization"]);
+            return Ok("hello");
+        };
+
+        await f.Cache.GetOrFetchAsync(Url, Hour(), headers: headers);
+
+        // Cached follow-up calls do not need headers, but the fetch path carries them.
+        await f.Cache.GetOrFetchAsync(Url, Hour(), headers: headers);
+        Assert.Single(f.Upstream.Requests);
+    }
+
+    [Fact]
     public void ComputeKey_is_a_deterministic_sha256_hex()
     {
         Assert.Equal(64, UpstreamCache.ComputeKey(Url).Length);
