@@ -16,6 +16,7 @@ on:
   pull_request:
   schedule:
     - cron: "17 4 * * *" # nightly rebuild + CVE rescan
+  workflow_dispatch: # manual rebuild + CVE rescan
 
 permissions:
   contents: read
