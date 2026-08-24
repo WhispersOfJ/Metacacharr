@@ -92,6 +92,22 @@ docker run -d --name metacache --network host metacache
 # binds 0.0.0.0:8765 (configurable via Metacache__Port)
 ```
 
+### Monitoring stack (Docker Compose)
+
+`monitoring/` ships a full stack: the host, Prometheus scraping `/metrics/prometheus`
+with the alerting rules loaded, and a pre-wired Grafana (datasource + a 10-panel
+Metacache dashboard auto-provisioned).
+
+```bash
+cp monitoring/.env.example monitoring/.env   # set METACACHE_TMDB_APIKEY (required)
+docker compose -f monitoring/docker-compose.yml up -d --build
+# → Metacache :8765 · Prometheus :9090 · Grafana :3000 (admin / GRAFANA_ADMIN_PASSWORD)
+```
+
+The dashboard overlays the same metrics as the built-in page (hit rate, latency
+p50/p95 per provider, items by kind, warm status, disk usage, rate-limited
+responses); alerts fire through the rules in `monitoring/metacache-alerts.yml`.
+
 ## Provider endpoints
 
 | Endpoint | Purpose |

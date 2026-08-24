@@ -1,0 +1,14 @@
+# Prometheus configuration for the Metacache monitoring stack (DESIGN §18).
+# The job MUST be named "metacache" — the alerting rules select on {job="metacache"}.
+global:
+  scrape_interval: 15s      # also the dashboard's scrape-overlay cadence
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/metacache-alerts.yml
+
+scrape_configs:
+  - job_name: metacache
+    metrics_path: /metrics/prometheus
+    static_configs:
+      - targets: ["metacache:8765"]

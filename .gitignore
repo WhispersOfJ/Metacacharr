@@ -16,3 +16,6 @@ data/
 *.db
 *.db-shm
 *.db-wal
+
+## Local provisioning secrets (docker compose .env — never commit)
+monitoring/.env

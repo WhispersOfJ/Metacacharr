@@ -92,4 +92,6 @@ groups:
           severity: warning
         annotations:
           summary: No warm has run for 36 hours
-          description: "The last warm attempt (success or failure) was {{ printf \"%.0f\" (time() - metacache_warm_last_timestamp_seconds) }} seconds ago. Check the scheduled warm config (Metacache:Warm:Enabled/ScheduleTime) and /warm/status."
+          # Note: time() is PromQL-only — alert templates cannot compute "seconds ago",
+          # so the description is static (the expression already pins the threshold).
+          description: "The last warm attempt (success or failure) completed more than 36 hours ago. Check the scheduled warm config (Metacache:Warm:Enabled/ScheduleTime) and /warm/status."
