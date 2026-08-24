@@ -178,6 +178,174 @@ public static class TmdbTestData
 
     public const string EmptyFindJson = """{ "movie_results": [] }""";
 
+    // ---- movie credits / release dates ----
+
+    public const string MovieCreditsJson = """
+        {
+          "id": 105,
+          "cast": [
+            { "id": 4, "name": "Michael J. Fox", "character": "Marty McFly", "order": 0, "profile_path": "/fox.jpg" },
+            { "id": 5, "name": "Christopher Lloyd", "character": "Emmett Brown", "order": 1, "profile_path": "/lloyd.jpg" }
+          ],
+          "crew": [
+            { "id": 1, "name": "Robert Zemeckis", "job": "Director", "department": "Directing", "order": 0, "profile_path": "/zemeckis.jpg" },
+            { "id": 2, "name": "Bob Gale", "job": "Writer", "department": "Writing", "order": 1, "profile_path": "/gale.jpg" },
+            { "id": 3, "name": "Neil Canton", "job": "Producer", "department": "Production", "order": 2, "profile_path": null }
+          ]
+        }
+        """;
+
+    public const string ReleaseDatesJson = """
+        {
+          "results": [
+            { "iso_3166_1": "US", "release_dates": [ { "certification": "PG", "type": 3 } ] },
+            { "iso_3166_1": "DE", "release_dates": [ { "certification": "FSK 12", "type": 3 } ] }
+          ]
+        }
+        """;
+
+    // ---- TV ----
+
+    public const int ShowId = 15260;
+
+    public const string TvSearchJson = """
+        {
+          "page": 1,
+          "results": [
+            {
+              "adult": false,
+              "backdrop_path": "/at-backdrop.jpg",
+              "first_air_date": "2010-04-05",
+              "id": 15260,
+              "name": "Adventure Time",
+              "original_language": "en",
+              "original_name": "Adventure Time",
+              "overview": "Unlikely heroes Finn and Jake.",
+              "popularity": 80.0,
+              "poster_path": "/at-poster.jpg",
+              "vote_average": 8.5,
+              "vote_count": 3000
+            }
+          ]
+        }
+        """;
+
+    public const string TvShowJson = """
+        {
+          "adult": false,
+          "backdrop_path": "/at-backdrop.jpg",
+          "episode_run_time": [ 11 ],
+          "first_air_date": "2010-04-05",
+          "genres": [ { "id": 16, "name": "Animation" } ],
+          "id": 15260,
+          "last_air_date": "2018-09-03",
+          "name": "Adventure Time",
+          "networks": [ { "id": 56, "name": "Cartoon Network" } ],
+          "original_language": "en",
+          "original_name": "Adventure Time",
+          "overview": "Unlikely heroes Finn and Jake.",
+          "popularity": 80.0,
+          "poster_path": "/at-poster.jpg",
+          "production_companies": [ { "id": 7846, "name": "Cartoon Network Studios" } ],
+          "production_countries": [ { "iso_3166_1": "US", "name": "United States of America" } ],
+          "seasons": [
+            { "air_date": "2010-04-05", "episode_count": 26, "id": 3624, "name": "Season 1", "overview": "", "poster_path": "/at-s1.jpg", "season_number": 1 },
+            { "air_date": "2010-10-11", "episode_count": 26, "id": 3625, "name": "Season 2", "overview": "", "poster_path": "/at-s2.jpg", "season_number": 2 }
+          ],
+          "vote_average": 8.5,
+          "vote_count": 3000
+        }
+        """;
+
+    public const string Season1Json = """
+        {
+          "air_date": "2010-04-05",
+          "episodes": [
+            { "air_date": "2010-04-05", "episode_number": 1, "id": 71833, "name": "Slumber Party Panic", "overview": "Finn and Jake fight zombies.", "runtime": 11, "season_number": 1, "still_path": "/at-e1.jpg", "vote_average": 7.8 },
+            { "air_date": "2010-04-05", "episode_number": 2, "id": 71834, "name": "Trouble in Lumpy Space", "overview": "Lumpy Space Princess visits.", "runtime": 11, "season_number": 1, "still_path": "/at-e2.jpg", "vote_average": 7.6 }
+          ],
+          "id": 3624,
+          "name": "Season 1",
+          "overview": "The first season of Adventure Time.",
+          "poster_path": "/at-s1.jpg",
+          "season_number": 1
+        }
+        """;
+
+    public const string Season2Json = """
+        {
+          "air_date": "2010-10-11",
+          "episodes": [
+            { "air_date": "2010-10-11", "episode_number": 1, "id": 71840, "name": "It Came from the Nightosphere", "overview": "Marceline's dad shows up.", "runtime": 11, "season_number": 2, "still_path": "/at-e3.jpg", "vote_average": 8.1 }
+          ],
+          "id": 3625,
+          "name": "Season 2",
+          "overview": "The second season of Adventure Time.",
+          "poster_path": "/at-s2.jpg",
+          "season_number": 2
+        }
+        """;
+
+    public const string Episode11Json = """
+        {
+          "air_date": "2010-04-05",
+          "episode_number": 1,
+          "id": 71833,
+          "name": "Slumber Party Panic",
+          "overview": "Finn and Jake fight zombies.",
+          "runtime": 11,
+          "season_number": 1,
+          "still_path": "/at-e1.jpg",
+          "vote_average": 7.8
+        }
+        """;
+
+    public const string ShowCreditsJson = """
+        {
+          "id": 15260,
+          "cast": [
+            { "id": 100, "name": "Jeremy Shada", "character": "Finn (voice)", "order": 0, "profile_path": "/shada.jpg" }
+          ],
+          "crew": [
+            { "id": 101, "name": "Pendleton Ward", "job": "Creator", "department": "Writing", "order": 0, "profile_path": "/ward.jpg" }
+          ]
+        }
+        """;
+
+    public const string ShowContentRatingsJson = """
+        {
+          "results": [
+            { "iso_3166_1": "US", "rating": "TV-PG" },
+            { "iso_3166_1": "DE", "rating": "FSK 6" }
+          ]
+        }
+        """;
+
+    public const string ShowExternalIdsJson = """
+        { "id": 15260, "imdb_id": "tt1305826", "tvdb_id": 152831 }
+        """;
+
+    public const string FindTvJson = """
+        {
+          "movie_results": [],
+          "tv_results": [
+            {
+              "adult": false,
+              "backdrop_path": "/at-backdrop.jpg",
+              "first_air_date": "2010-04-05",
+              "id": 15260,
+              "name": "Adventure Time",
+              "original_language": "en",
+              "original_name": "Adventure Time",
+              "overview": "Unlikely heroes Finn and Jake.",
+              "popularity": 80.0,
+              "poster_path": "/at-poster.jpg",
+              "vote_average": 8.5
+            }
+          ]
+        }
+        """;
+
     /// <summary>Routes the canned responses by path; throws on anything unexpected.</summary>
     public static void Route(this FakeUpstream upstream, string baseUrl = BaseUrl)
     {
@@ -186,6 +354,30 @@ public static class TmdbTestData
             string path = request.Url.AbsolutePath;
             if (path.EndsWith("/search/movie", StringComparison.Ordinal))
                 return Json(request.Url.Query.Contains("query=Explicit", StringComparison.Ordinal) ? AdultSearchJson : SearchJson);
+            if (path.EndsWith("/search/tv", StringComparison.Ordinal))
+                return Json(TvSearchJson);
+            if (path.EndsWith("/movie/105/credits", StringComparison.Ordinal))
+                return Json(MovieCreditsJson);
+            if (path.EndsWith("/movie/105/release_dates", StringComparison.Ordinal))
+                return Json(ReleaseDatesJson);
+            if (path.EndsWith("/tv/15260/credits", StringComparison.Ordinal))
+                return Json(ShowCreditsJson);
+            if (path.EndsWith("/tv/15260/content_ratings", StringComparison.Ordinal))
+                return Json(ShowContentRatingsJson);
+            if (path.EndsWith("/tv/15260/external_ids", StringComparison.Ordinal))
+                return Json(ShowExternalIdsJson);
+            if (path.EndsWith("/tv/15260/season/1/episode/1", StringComparison.Ordinal))
+                return Json(Episode11Json);
+            if (path.EndsWith("/tv/15260/season/1", StringComparison.Ordinal))
+                return Json(Season1Json);
+            if (path.EndsWith("/tv/15260/season/2", StringComparison.Ordinal))
+                return Json(Season2Json);
+            if (path.Contains("/tv/15260/season/", StringComparison.Ordinal))
+                return JsonStatus(404, """{ "status_code": 34 }""");
+            if (path.EndsWith("/tv/15260", StringComparison.Ordinal))
+                return Json(TvShowJson);
+            if (path.EndsWith("/tv/999999999", StringComparison.Ordinal))
+                return JsonStatus(404, """{ "status_code": 34 }""");
             if (path.EndsWith("/movie/999999999", StringComparison.Ordinal))
                 return JsonStatus(404, """{ "status_code": 34, "status_message": "The resource you requested could not be found." }""");
             if (path.EndsWith("/movie/165", StringComparison.Ordinal))
@@ -196,6 +388,8 @@ public static class TmdbTestData
                 return Json(Movie105Json);
             if (path.EndsWith("/find/tt0088763", StringComparison.Ordinal))
                 return Json(Find105Json);
+            if (path.EndsWith("/find/tt1305826", StringComparison.Ordinal))
+                return Json(FindTvJson);
             if (path.EndsWith("/find/tt999999", StringComparison.Ordinal))
                 return Json(EmptyFindJson);
             if (path.StartsWith("/t/p/", StringComparison.Ordinal))

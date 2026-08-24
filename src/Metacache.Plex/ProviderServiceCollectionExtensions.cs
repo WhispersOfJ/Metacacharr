@@ -12,6 +12,7 @@ public static class ProviderServiceCollectionExtensions
     public static IServiceCollection AddMetacachePlexProviders(this IServiceCollection services)
     {
         services.AddSingleton<MovieProviderService>();
+        services.AddSingleton<TvProviderService>();
         return services;
     }
 }

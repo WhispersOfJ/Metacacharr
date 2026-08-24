@@ -436,7 +436,8 @@ Plex changes the API (it will — it's brand new), you change one folder.
 - **M2 — TV:** shows/seasons/episodes; `/children` + `/grandchildren` with paging;
   episode matching by index and air date; localization (X-Plex-Language); content
   ratings by country; alternate episode orders. *DoD:* a TV library works end to end
-  with correct episode matching on re-scans.
+  with correct episode matching on re-scans. **Shipped** — see §17 (alternate
+  episode orders still deferred).
 - **M3 — Companion features:** Sonarr/Radarr warm-up jobs; metrics + dashboard
   (hit rate, per-provider counts, disk usage); manual purge + TTL tuning; stale-if-error
   offline mode. *DoD:* unplug the WAN and a full library refresh still completes.
@@ -618,10 +619,57 @@ case-insensitive conflict check rejects those pairs, so provider responses seria
 with `PropertyNameCaseInsensitive = false` (`ProviderJson`); every property name is
 pinned by an explicit attribute, so nothing else changes.
 
-**Deferred to M2 (kept the wire models ready):** cast/crew (`Role`/`Director`/
-`Producer`/`Writer`), certifications/`contentRating` (needs the release-dates call +
-`X-Plex-Country`), `Collection[]` (needs the collection feature + collections
-endpoint), `Network[]`, `SeasonType[]`, alternate episode orders, and response-
-customization params (`includeFields`/`excludeElements`). M1 serves `Guid[]`,
-`Genre[]`, `Image[]`, `Rating[]` (TMDB vote), `Country[]`, `Studio[]`, tagline,
-summary, duration and year — the fields Plex needs for a complete movie library.
+**Deferred to M2 (kept the wire models ready):** collections, `Network[]`,
+`SeasonType[]`, alternate episode orders, and response-customization params
+(`includeFields`/`excludeElements`). M1 serves `Guid[]`, `Genre[]`, `Image[]`,
+`Rating[]` (TMDB vote), `Country[]`, `Studio[]`, tagline, summary, duration and year
+— the fields Plex needs for a complete movie library.
+
+---
+
+## 17. M2 — TV shipped (implementation notes)
+
+M2 wires TMDB TV data into the §15.7 structure-gated scoring engine and ships the
+paged hierarchy endpoints, plus cast/crew and content ratings for both movies and TV.
+
+**Shows, seasons, episodes.** `TvProviderService` mirrors the movie service: a show
+match is search (or external-GUID find) → score → enrich the winner; season and
+episode matches resolve the show first, then gate on structure — `index`/`parentIndex`
+(and `SxxEyy` filename parsing) via the scorer, or exact `date` equality when only an
+air date is given — so a wrong season or episode can never be committed. A season
+match enriches the winning season's episodes (or all seasons when only an air date is
+supplied); manual match lists are ranked exactly like movies. Rating keys are
+`tmdb-show-{id}`, `tmdb-season-{id}-{n}`, `tmdb-episode-{id}-{s}-{e}`.
+
+**Hierarchy endpoints.** `GET /library/metadata/{ratingKey}/children` returns seasons
+of a show or episodes of a season; `/grandchildren` returns every episode of a show.
+Both page via Plex's `X-Plex-Container-Size`/`X-Plex-Container-Start` headers
+(`PlexPaging`), defaulting to a full page with `size`/`totalSize` in the
+`MediaContainer`.
+
+**Cast/crew and content ratings.** `PeopleMapper` emits `Role[]` (cast) and
+`Director[]`/`Producer[]`/`Writer[]` (crew) from TMDB credits, with profile photos
+rewritten to `/img/{hash}` like all artwork; movies enrich from `/movie/{id}/credits`,
+shows from `/tv/{id}/credits`. Content ratings come from `/movie/{id}/release_dates`
+(certifications) and `/tv/{id}/content_ratings`, resolved by `X-Plex-Country` (falls
+back to the US rating). The extra calls run in parallel and are cached.
+
+**GUID pinning needed real external ids.** A `tmdb://` pin was always exact, but an
+`imdb://`/`tvdb://` pin on a show built its candidate from a TMDB *summary*, which
+carries only `tmdb://` — so the scorer's exact-GUID override never fired and the auto
+threshold filtered the result to empty. The movie flow avoided this because
+`/movie/{id}` includes `imdb_id`; TV needs the separate `/tv/{id}/external_ids` call.
+The show match flow now enriches guid-pinned candidates with their real external ids
+(`find` + `show` + `external_ids` = 3 calls, mirroring the movie DoD) so the override
+fires and the pinned show is returned exactly.
+
+**Contract gaps caught by tests.** (1) Plex's `guid`/`Guid` case collision is shared
+by every kind, so all provider JSON keeps the case-sensitive `ProviderJson` options.
+(2) The TV images endpoints initially served raw TMDB URLs instead of rewritten
+`/img/{hash}` assets — the rewrite helper is now applied to every served image.
+(3) A fixture that served one movie's details for every `/movie/{id}` hid enrichment
+bugs; distinct fixtures now exist per item.
+
+**Deferred:** collections, alternate episode orders, `Network[]`, `SeasonType[]`, and
+`includeFields`/`excludeElements` response customization. Wire models for all of
+these already exist in `MetadataModels.cs`.

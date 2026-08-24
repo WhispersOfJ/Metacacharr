@@ -7,15 +7,22 @@ HTTP metadata server.
 
 See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
 
-## Status: M0–M1 shipped
+## Status: M0–M2 shipped
 
 - `GET /movie` and `GET /tv` serve the MediaProvider definitions Plex needs to register
   the providers ("Add Provider").
 - **Movies end to end (M1):** `POST /library/metadata/matches` (search, external-GUID
   pinning, ranked manual "Fix Match" lists), `GET /library/metadata/{ratingKey}` (full
-  metadata), and `GET /library/metadata/{ratingKey}/images`. All TMDB traffic flows
-  through the local cache (single-flight, TTL, ETag revalidation, stale-if-error) and
-  artwork URLs are rewritten to the local `/img/{hash}` endpoint.
+  metadata incl. cast/crew and content rating), and `GET /library/metadata/{ratingKey}/images`.
+  All TMDB traffic flows through the local cache (single-flight, TTL, ETag revalidation,
+  stale-if-error) and artwork URLs are rewritten to the local `/img/{hash}` endpoint.
+- **TV end to end (M2):** shows, seasons, and episodes — match by title/year or by
+  season/episode index / air date (structure-gated scoring), GUID pinning for all
+  three kinds, full metadata with `parentTitle`/`grandparentTitle` + `parentIndex`,
+  and the paged hierarchy endpoints `GET …/{ratingKey}/children` and
+  `…/grandchildren` (`X-Plex-Container-Size` / `-Start`). Cast/crew (`Person[]`,
+  `Role[]`, `Director[]`, `Writer[]`) and content ratings (`X-Plex-Country`-aware)
+  ship for both movies and TV.
 - `GET /healthz` liveness check.
 - Admin surface: `GET /cache/stats` (cache sizes) and `POST /cache/purge` (expired-row
   cleanup), returning `{ "removed": n }`.
@@ -27,8 +34,7 @@ See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
   keyed single-flight dedupe, ETag revalidation, TTL expiry, stale-if-error serving,
   and per-request header forwarding (used for TMDB Bearer auth) — fully unit-tested.
 
-TV support (M2), cache warming (M3) and the ARR proxy face (M4) are next — see
-DESIGN.md §12.
+Cache warming (M3) and the ARR proxy face (M4) are next — see DESIGN.md §12.
 
 ## Requirements
 
@@ -68,18 +74,21 @@ docker run -d --name metacache --network host metacache
 # binds 0.0.0.0:8765 (configurable via Metacache__Port)
 ```
 
-## Provider endpoints (M1)
+## Provider endpoints
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /library/metadata/matches` | Match — body: `{ "type": 1, "title": …, "year": …, "guid": …, "filename": …, "manual": 0/1, "includeAdult": 0/1 }`. Auto returns the single best match (or empty → Plex shows Fix Match); `manual: 1` returns a ranked list |
-| `GET /library/metadata/{ratingKey}` | Full metadata for a movie, e.g. `tmdb-movie-105` — includes `Guid[]`, `Genre[]`, `Image[]`, `Rating[]`, `Country[]`, `Studio[]`; artwork points at `/img/{hash}` |
+| `POST /library/metadata/matches` | Match — body: `{ "type": 1–4, "title": …, "year": …, "guid": …, "parentTitle": …, "grandparentTitle": …, "index": …, "parentIndex": …, "date": …, "filename": …, "manual": 0/1, "includeAdult": 0/1, "includeChildren": 0/1 }` (`type`: 1=movie, 2=show, 3=season, 4=episode). Auto returns the single best match (or empty → Plex shows Fix Match); `manual: 1` returns a ranked list |
+| `GET /library/metadata/{ratingKey}` | Full metadata for a movie (`tmdb-movie-105`), show (`tmdb-show-15260`), season (`tmdb-season-15260-1`), or episode (`tmdb-episode-15260-1-1`) — `Guid[]`, `Genre[]`, `Image[]`, `Rating[]`, `Country[]`, `Studio[]`, cast/crew, content rating; artwork points at `/img/{hash}` |
+| `GET /library/metadata/{ratingKey}/children` | Seasons of a show / episodes of a season, paged |
+| `GET /library/metadata/{ratingKey}/grandchildren` | All episodes of a show, paged |
 | `GET /library/metadata/{ratingKey}/images` | All image assets for the item |
 
 Localization via the `X-Plex-Language` header (or query param) is passed through to
-TMDB and used for the match language tiebreak. TMDB responses are cached with TTLs
-(search 12 h, movie details 24 h), so a full library refresh touches upstream once per
-movie, and refreshes after that hit the cache entirely.
+TMDB and used for the match language tiebreak; `X-Plex-Country` picks the content
+rating. TMDB responses are cached with TTLs (search 12 h, details 24 h), so a full
+library refresh touches upstream once per item, and refreshes after that hit the
+cache entirely.
 
 ## Registering the providers in Plex
 
@@ -106,7 +115,8 @@ src/Metacache.Core/Cache/     SQLite store, single-flight, upstream gateway, ite
 src/Metacache.Core/Providers/  TMDB client (search/find/details through the cache)
 src/Metacache.Core/Matching/   match scoring, title normalization, filename parsing
 src/Metacache.Plex/            Plex provider API: wire models, catalog, rating keys,
-                               match parser, movie provider service, endpoints
+                               match parser, movie + TV provider services, mappers,
+                               endpoints
 src/Metacache.Host/            ASP.NET Core host, config, logging
 tests/Metacache.Host.Tests/    integration + unit tests (provider API, cache core, matching)
 ```

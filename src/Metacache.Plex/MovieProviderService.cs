@@ -62,14 +62,23 @@ public sealed class MovieProviderService
 
     /// <summary>Full metadata for a movie rating key; null when the id is malformed or the movie is unknown.</summary>
     public async Task<MetadataContainer?> GetMovieMetadataAsync(
-        string tmdbId, string? language, CancellationToken cancellationToken)
+        string tmdbId, string? language, string? country, CancellationToken cancellationToken)
     {
         if (!int.TryParse(tmdbId, NumberStyles.None, CultureInfo.InvariantCulture, out int id))
             return null;
 
         TmdbMovie movie = await _tmdb.GetMovieAsync(id, language, cancellationToken);
         RegisterImages(movie);
-        var item = MovieMapper.ToMetadata(movie, ProviderIdentities.Movie, _options.ImageBaseUrl, language);
+
+        Task<TmdbCredits> creditsTask = _tmdb.GetMovieCreditsAsync(id, language, cancellationToken);
+        Task<TmdbReleaseDatesResponse> releaseTask = _tmdb.GetMovieReleaseDatesAsync(id, cancellationToken);
+        await Task.WhenAll(creditsTask, releaseTask);
+        TmdbCredits credits = await creditsTask;
+        TmdbReleaseDatesResponse releaseDates = await releaseTask;
+        RegisterCredits(credits);
+
+        var item = MovieMapper.ToMetadata(movie, credits, releaseDates, country,
+            ProviderIdentities.Movie, _options.ImageBaseUrl, language);
         return new MetadataContainer(0, 1, ProviderIdentities.Movie, 1, [item]);
     }
 
@@ -149,6 +158,15 @@ public sealed class MovieProviderService
             _images.RegisterUrl(poster);
         if (_tmdb.ImageUrl(movie.BackdropPath) is { } backdrop)
             _images.RegisterUrl(backdrop);
+    }
+
+    private void RegisterCredits(TmdbCredits credits)
+    {
+        foreach (TmdbCreditPerson person in (credits.Cast ?? []).Concat(credits.Crew ?? []))
+        {
+            if (_tmdb.ImageUrl(person.ProfilePath) is { } url)
+                _images.RegisterUrl(url);
+        }
     }
 
     private static MatchCandidate CandidateFrom(TmdbMovieSummary summary) => new(

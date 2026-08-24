@@ -29,7 +29,14 @@ public static class MovieMapper
     }
 
     /// <summary>Full metadata item for GET /library/metadata/{ratingKey}.</summary>
-    public static MetadataItem ToMetadata(TmdbMovie movie, string providerIdentifier, string imageBaseUrl, string? language)
+    public static MetadataItem ToMetadata(
+        TmdbMovie movie,
+        TmdbCredits? credits,
+        TmdbReleaseDatesResponse? releaseDates,
+        string? country,
+        string providerIdentifier,
+        string imageBaseUrl,
+        string? language)
     {
         string ratingKey = RatingKey.Movie("tmdb", movie.Id.ToString(CultureInfo.InvariantCulture));
         string title = TitleOf(movie);
@@ -50,6 +57,7 @@ public static class MovieMapper
             IsAdult: movie.Adult ? true : null,
             Duration: movie.Runtime is { } minutes ? minutes * 60_000 : null,
             Tagline: movie.Tagline,
+            ContentRating: PeopleMapper.MovieCertification(releaseDates, country),
             Studio: movie.ProductionCompanies?.FirstOrDefault()?.Name,
             Image: BuildImages(movie, imageBaseUrl),
             Genre: movie.Genres is null ? null : movie.Genres.Select(g => new GenreItem(g.Name ?? "")).ToList(),
@@ -57,6 +65,10 @@ public static class MovieMapper
             Rating: movie.VoteAverage > 0
                 ? [new RatingItem("themoviedb://image.rating", "audience", movie.VoteAverage)]
                 : null,
+            Role: PeopleMapper.ToRoles(credits, imageBaseUrl),
+            Director: PeopleMapper.CrewByJob(credits, "Director", imageBaseUrl),
+            Producer: PeopleMapper.CrewByJob(credits, "Producer", imageBaseUrl),
+            Writer: PeopleMapper.CrewByJob(credits, "Writer", imageBaseUrl),
             Country: movie.ProductionCountries is null ? null
                 : movie.ProductionCountries.Select(c => new CountryItem(c.Name ?? "")).ToList(),
             StudioItems: movie.ProductionCompanies is null ? null

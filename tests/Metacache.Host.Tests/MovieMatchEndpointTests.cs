@@ -104,10 +104,10 @@ public class MovieMatchEndpointTests : ProviderEndpointTestBase
     }
 
     [Fact]
-    public async Task Tv_type_returns_400_until_m2()
+    public async Task Unknown_type_returns_400()
     {
         var response = await Client.PostAsync("/library/metadata/matches",
-            JsonBody("""{"type":2,"title":"Adventure Time"}"""));
+            JsonBody("""{"type":9,"title":"x"}"""));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }

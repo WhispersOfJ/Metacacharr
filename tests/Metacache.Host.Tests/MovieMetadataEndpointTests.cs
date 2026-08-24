@@ -45,6 +45,25 @@ public class MovieMetadataEndpointTests : ProviderEndpointTestBase
         Assert.Equal("themoviedb://image.rating", rating.Image);
         Assert.Equal("audience", rating.Type);
         Assert.Equal(8.3, rating.Value);
+
+        Assert.Equal("PG", item.ContentRating); // US default, bare
+        Assert.Contains(item.Role!, r => r is { Tag: "Michael J. Fox", Role: "Marty McFly" });
+        Assert.Contains(item.Director!, d => d.Tag == "Robert Zemeckis");
+        Assert.Contains(item.Writer!, w => w.Tag == "Bob Gale");
+        Assert.Contains(item.Producer!, p => p.Tag == "Neil Canton");
+        Assert.StartsWith("/img/", item.Role![0].Thumb); // person photo rewritten too
+    }
+
+    [Fact]
+    public async Task Content_rating_follows_the_requested_country()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, "/library/metadata/tmdb-movie-105");
+        request.Headers.Add("X-Plex-Country", "DE");
+
+        var response = await Client.SendAsync(request);
+        MetadataItem item = (await ReadProviderAsync<MetadataContainerResponse>(response))!.MediaContainer.Metadata[0];
+
+        Assert.Equal("de/FSK 12", item.ContentRating); // non-US ratings are country-prefixed
     }
 
     [Fact]
@@ -62,7 +81,7 @@ public class MovieMetadataEndpointTests : ProviderEndpointTestBase
         Assert.Equal(HttpStatusCode.OK, image.StatusCode);
         Assert.Equal("image/jpeg", image.Content.Headers.ContentType!.MediaType);
         Assert.Equal("fake-jpeg-bytes", await image.Content.ReadAsStringAsync());
-        Assert.Equal(2, Upstream.Requests.Count); // details + one image fetch
+        Assert.Equal(4, Upstream.Requests.Count); // details + credits + release dates + one image fetch
     }
 
     [Fact]
@@ -72,7 +91,7 @@ public class MovieMetadataEndpointTests : ProviderEndpointTestBase
         var response = await Client.GetAsync("/library/metadata/tmdb-movie-105");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Single(Upstream.Requests); // details fetched exactly once
+        Assert.Equal(3, Upstream.Requests.Count); // details + credits + release dates, fetched once
     }
 
     [Fact]
@@ -84,9 +103,9 @@ public class MovieMetadataEndpointTests : ProviderEndpointTestBase
     }
 
     [Fact]
-    public async Task Non_movie_key_returns_404_without_hitting_upstream()
+    public async Task Non_tmdb_source_returns_404_without_hitting_upstream()
     {
-        var response = await Client.GetAsync("/library/metadata/tmdb-show-105");
+        var response = await Client.GetAsync("/library/metadata/tvdb-show-78874");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Empty(Upstream.Requests);

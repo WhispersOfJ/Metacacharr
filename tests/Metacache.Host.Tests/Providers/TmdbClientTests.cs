@@ -205,6 +205,132 @@ public class TmdbClientTests
         Assert.Null(f.Client.ImageUrl(""));
     }
 
+    [Fact]
+    public async Task SearchShows_uses_the_tv_endpoint_and_first_air_date_year()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Json(TmdbTestData.TvSearchJson);
+
+        IReadOnlyList<TmdbShowSummary> results = await f.Client.SearchShowsAsync("Adventure Time", 2010, "en-US");
+
+        string url = f.Upstream.Requests.Single().Url.AbsoluteUri;
+        Assert.Contains("/search/tv?", url);
+        Assert.Contains("query=Adventure%20Time", url);
+        Assert.Contains("first_air_date_year=2010", url);
+
+        Assert.Single(results);
+        TmdbShowSummary first = results[0];
+        Assert.Equal(TmdbTestData.ShowId, first.Id);
+        Assert.Equal("Adventure Time", first.Name);
+        Assert.Equal("2010-04-05", first.FirstAirDate);
+        Assert.Equal("en", first.OriginalLanguage);
+        Assert.Equal(8.5, first.VoteAverage);
+    }
+
+    [Fact]
+    public async Task GetShow_parses_seasons_and_details()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Json(TmdbTestData.TvShowJson);
+
+        TmdbShow show = await f.Client.GetShowAsync(TmdbTestData.ShowId, "en-US");
+
+        Assert.Equal(TmdbTestData.ShowId, show.Id);
+        Assert.Equal("Adventure Time", show.Name);
+        Assert.Equal("2010-04-05", show.FirstAirDate);
+        Assert.Equal(["Animation"], show.Genres!.Select(g => g.Name));
+        Assert.Equal(2, show.Seasons!.Count);
+        Assert.Equal(1, show.Seasons![0].SeasonNumber);
+        Assert.Equal(26, show.Seasons![0].EpisodeCount);
+        Assert.Equal("Cartoon Network", show.Networks![0].Name);
+    }
+
+    [Fact]
+    public async Task GetSeason_hits_the_season_endpoint_and_parses_episodes()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Json(TmdbTestData.Season1Json);
+
+        TmdbSeason season = await f.Client.GetSeasonAsync(TmdbTestData.ShowId, 1, "en-US");
+
+        Assert.Contains($"/tv/{TmdbTestData.ShowId}/season/1", f.Upstream.Requests.Single().Url.AbsoluteUri);
+        Assert.Equal(3624, season.Id);
+        Assert.Equal(1, season.SeasonNumber);
+        Assert.Equal(2, season.Episodes!.Count);
+        Assert.Equal(71833, season.Episodes![0].Id);
+        Assert.Equal("Slumber Party Panic", season.Episodes![0].Name);
+        Assert.Equal("2010-04-05", season.Episodes![0].AirDate);
+    }
+
+    [Fact]
+    public async Task GetEpisode_parses_episode_details()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Json(TmdbTestData.Episode11Json);
+
+        TmdbEpisode episode = await f.Client.GetEpisodeAsync(TmdbTestData.ShowId, 1, 1, "en-US");
+
+        Assert.Equal(71833, episode.Id);
+        Assert.Equal(1, episode.EpisodeNumber);
+        Assert.Equal(1, episode.SeasonNumber);
+        Assert.Equal("Slumber Party Panic", episode.Name);
+        Assert.Equal("/at-e1.jpg", episode.StillPath);
+    }
+
+    [Fact]
+    public async Task GetShowCredits_parses_cast_and_crew()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Json(TmdbTestData.ShowCreditsJson);
+
+        TmdbCredits credits = await f.Client.GetShowCreditsAsync(TmdbTestData.ShowId, "en-US");
+
+        Assert.Equal("Jeremy Shada", credits.Cast![0].Name);
+        Assert.Equal("Finn (voice)", credits.Cast![0].Character);
+        Assert.Equal("Pendleton Ward", credits.Crew![0].Name);
+        Assert.Equal("Creator", credits.Crew![0].Job);
+    }
+
+    [Fact]
+    public async Task GetContentRatings_parses_country_ratings()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Json(TmdbTestData.ShowContentRatingsJson);
+
+        TmdbContentRatingsResponse ratings = await f.Client.GetContentRatingsAsync(TmdbTestData.ShowId);
+
+        Assert.Equal(2, ratings.Results!.Count);
+        Assert.Equal("US", ratings.Results![0].Iso);
+        Assert.Equal("TV-PG", ratings.Results![0].Rating);
+        Assert.Equal("DE", ratings.Results![1].Iso);
+        Assert.Equal("FSK 6", ratings.Results![1].Rating);
+    }
+
+    [Fact]
+    public async Task GetShowExternalIds_parses_imdb_and_tvdb()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Json(TmdbTestData.ShowExternalIdsJson);
+
+        TmdbExternalIds ids = await f.Client.GetShowExternalIdsAsync(TmdbTestData.ShowId);
+
+        Assert.Equal("tt1305826", ids.ImdbId);
+        Assert.Equal(152831, ids.TvdbId);
+    }
+
+    [Fact]
+    public async Task FindTvByExternalId_returns_tv_results()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Json(TmdbTestData.FindTvJson);
+
+        IReadOnlyList<TmdbShowSummary> results = await f.Client.FindTvByExternalIdAsync("imdb_id", "tt1305826", "en-US");
+
+        Assert.Single(results);
+        Assert.Equal(TmdbTestData.ShowId, results[0].Id);
+        Assert.Contains("external_source=imdb_id", f.Upstream.Requests.Single().Url.Query);
+    }
+
     private static UpstreamResponse Json(string body) =>
         new(200, TestBytes.Of(body), "application/json", null, null, null);
 }

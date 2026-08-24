@@ -35,6 +35,9 @@ public sealed class TmdbClient
     public static readonly CachePolicy SearchPolicy = new(TimeSpan.FromHours(12));
     public static readonly CachePolicy MoviePolicy = new(TimeSpan.FromHours(24));
 
+    /// <summary>Shows/seasons/episodes/credits/ratings — 24 h like movie details.</summary>
+    public static readonly CachePolicy TvPolicy = new(TimeSpan.FromHours(24));
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly TmdbOptions _options;
@@ -98,6 +101,21 @@ public sealed class TmdbClient
     public async Task<IReadOnlyList<TmdbMovieSummary>> FindByExternalIdAsync(
         string externalSource, string externalId, string? language, CancellationToken cancellationToken = default)
     {
+        TmdbFindResponse? response = await FindAsync(externalSource, externalId, language, cancellationToken).ConfigureAwait(false);
+        return response?.MovieResults ?? [];
+    }
+
+    /// <summary>Resolves an external id to TMDB shows (used for TV GUID pinning).</summary>
+    public async Task<IReadOnlyList<TmdbShowSummary>> FindTvByExternalIdAsync(
+        string externalSource, string externalId, string? language, CancellationToken cancellationToken = default)
+    {
+        TmdbFindResponse? response = await FindAsync(externalSource, externalId, language, cancellationToken).ConfigureAwait(false);
+        return response?.TvResults ?? [];
+    }
+
+    private async Task<TmdbFindResponse?> FindAsync(
+        string externalSource, string externalId, string? language, CancellationToken cancellationToken)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(externalSource);
         ArgumentException.ThrowIfNullOrWhiteSpace(externalId);
 
@@ -107,9 +125,99 @@ public sealed class TmdbClient
             ["language"] = language ?? "en-US"
         };
         string url = BuildUrl($"/find/{Uri.EscapeDataString(externalId)}", queryParams);
-        TmdbFindResponse? response = await GetJsonAsync<TmdbFindResponse>(url, SearchPolicy, cancellationToken)
+        return await GetJsonAsync<TmdbFindResponse>(url, SearchPolicy, cancellationToken).ConfigureAwait(false);
+    }
+
+    // ---- TV ----
+
+    /// <summary>Searches TV shows by name, optionally narrowed by first-air year.</summary>
+    public async Task<IReadOnlyList<TmdbShowSummary>> SearchShowsAsync(
+        string query, int? year, string? language, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+
+        var queryParams = new Dictionary<string, string?>
+        {
+            ["query"] = query,
+            ["language"] = language ?? "en-US",
+            ["page"] = "1"
+        };
+        if (year is { } y)
+            queryParams["first_air_date_year"] = y.ToString(CultureInfo.InvariantCulture);
+
+        string url = BuildUrl("/search/tv", queryParams);
+        TmdbTvSearchResponse? response = await GetJsonAsync<TmdbTvSearchResponse>(url, SearchPolicy, cancellationToken)
             .ConfigureAwait(false);
-        return response?.MovieResults ?? [];
+        return response?.Results ?? [];
+    }
+
+    public async Task<TmdbShow> GetShowAsync(int id, string? language, CancellationToken cancellationToken = default)
+    {
+        var queryParams = new Dictionary<string, string?> { ["language"] = language ?? "en-US" };
+        string url = BuildUrl($"/tv/{id}", queryParams);
+        TmdbShow? show = await GetJsonAsync<TmdbShow>(url, TvPolicy, cancellationToken).ConfigureAwait(false);
+        if (show is null)
+            throw new TmdbNotFoundException($"TMDB show {id} not found");
+        return show;
+    }
+
+    public async Task<TmdbSeason> GetSeasonAsync(
+        int showId, int seasonNumber, string? language, CancellationToken cancellationToken = default)
+    {
+        var queryParams = new Dictionary<string, string?> { ["language"] = language ?? "en-US" };
+        string url = BuildUrl($"/tv/{showId}/season/{seasonNumber}", queryParams);
+        TmdbSeason? season = await GetJsonAsync<TmdbSeason>(url, TvPolicy, cancellationToken).ConfigureAwait(false);
+        if (season is null)
+            throw new TmdbNotFoundException($"TMDB show {showId} season {seasonNumber} not found");
+        return season;
+    }
+
+    public async Task<TmdbEpisode> GetEpisodeAsync(
+        int showId, int seasonNumber, int episodeNumber, string? language, CancellationToken cancellationToken = default)
+    {
+        var queryParams = new Dictionary<string, string?> { ["language"] = language ?? "en-US" };
+        string url = BuildUrl($"/tv/{showId}/season/{seasonNumber}/episode/{episodeNumber}", queryParams);
+        TmdbEpisode? episode = await GetJsonAsync<TmdbEpisode>(url, TvPolicy, cancellationToken).ConfigureAwait(false);
+        if (episode is null)
+            throw new TmdbNotFoundException($"TMDB show {showId} S{seasonNumber}E{episodeNumber} not found");
+        return episode;
+    }
+
+    // ---- credits / ratings / external ids ----
+
+    public async Task<TmdbCredits> GetMovieCreditsAsync(int movieId, string? language, CancellationToken cancellationToken = default)
+    {
+        var queryParams = new Dictionary<string, string?> { ["language"] = language ?? "en-US" };
+        string url = BuildUrl($"/movie/{movieId}/credits", queryParams);
+        return await GetJsonAsync<TmdbCredits>(url, TvPolicy, cancellationToken).ConfigureAwait(false) ?? new TmdbCredits([], []);
+    }
+
+    public async Task<TmdbCredits> GetShowCreditsAsync(int showId, string? language, CancellationToken cancellationToken = default)
+    {
+        var queryParams = new Dictionary<string, string?> { ["language"] = language ?? "en-US" };
+        string url = BuildUrl($"/tv/{showId}/credits", queryParams);
+        return await GetJsonAsync<TmdbCredits>(url, TvPolicy, cancellationToken).ConfigureAwait(false) ?? new TmdbCredits([], []);
+    }
+
+    public async Task<TmdbReleaseDatesResponse> GetMovieReleaseDatesAsync(int movieId, CancellationToken cancellationToken = default)
+    {
+        string url = BuildUrl($"/movie/{movieId}/release_dates", query: null);
+        return await GetJsonAsync<TmdbReleaseDatesResponse>(url, TvPolicy, cancellationToken).ConfigureAwait(false)
+            ?? new TmdbReleaseDatesResponse([]);
+    }
+
+    public async Task<TmdbContentRatingsResponse> GetContentRatingsAsync(int showId, CancellationToken cancellationToken = default)
+    {
+        string url = BuildUrl($"/tv/{showId}/content_ratings", query: null);
+        return await GetJsonAsync<TmdbContentRatingsResponse>(url, TvPolicy, cancellationToken).ConfigureAwait(false)
+            ?? new TmdbContentRatingsResponse([]);
+    }
+
+    public async Task<TmdbExternalIds> GetShowExternalIdsAsync(int showId, CancellationToken cancellationToken = default)
+    {
+        string url = BuildUrl($"/tv/{showId}/external_ids", query: null);
+        return await GetJsonAsync<TmdbExternalIds>(url, TvPolicy, cancellationToken).ConfigureAwait(false)
+            ?? new TmdbExternalIds(null, null);
     }
 
     private async Task<T?> GetJsonAsync<T>(string url, CachePolicy policy, CancellationToken cancellationToken)

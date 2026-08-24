@@ -11,9 +11,10 @@ namespace Metacache.Plex;
 /// </summary>
 public static class MatchRequestParser
 {
-    public static bool TryParse(string body, out MatchHint hint, out string? error)
+    public static bool TryParse(string body, out MatchHint hint, out bool includeChildren, out string? error)
     {
         hint = MatchHint.Empty;
+        includeChildren = false;
         error = null;
 
         JsonDocument doc;
@@ -44,9 +45,17 @@ public static class MatchRequestParser
                 return false;
             }
 
-            if (type != PlexTypes.Movie)
+            MatchKind kind = type switch
             {
-                error = $"Matching type {type} is not implemented yet — M1 covers movies only (TV arrives in M2).";
+                PlexTypes.Movie => MatchKind.Movie,
+                PlexTypes.Show => MatchKind.Show,
+                PlexTypes.Season => MatchKind.Season,
+                PlexTypes.Episode => MatchKind.Episode,
+                _ => (MatchKind)(-1)
+            };
+            if ((int)kind < 0)
+            {
+                error = $"Unknown match type {type} (1=movie, 2=show, 3=season, 4=episode).";
                 return false;
             }
 
@@ -59,12 +68,13 @@ public static class MatchRequestParser
                 Manual: GetBool(root, "manual"),
                 IncludeAdult: GetBool(root, "includeAdult"),
                 Language: null, // set by the endpoint from X-Plex-Language
-                Kind: MatchKind.Movie,
+                Kind: kind,
                 ParentTitle: GetString(root, "parentTitle"),
                 GrandparentTitle: GetString(root, "grandparentTitle"),
                 Index: GetInt(root, "index"),
                 ParentIndex: GetInt(root, "parentIndex"),
                 AirDate: GetString(root, "date"));
+            includeChildren = GetBool(root, "includeChildren");
             return true;
         }
     }
