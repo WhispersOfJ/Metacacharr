@@ -5,6 +5,7 @@ services/radarr/router.py, moved here 2026-08-06 once this became a
 first-class integration spanning both Radarr and Sonarr).
 """
 import json as _json
+import os
 import time
 from datetime import datetime, timezone
 
@@ -45,6 +46,9 @@ from services.letterboxd.scraping import (
 router = APIRouter(tags=["letterboxd"])
 
 SERVICE_META = {"label": "Letterboxd", "health_check": None}
+
+METACACHE_URL = os.getenv("METACACHE_URL", "http://metacache:8765").rstrip("/")
+METACACHE_API_KEY = os.getenv("METACACHE_API_KEY", "")
 
 
 def _radarr_cfg(app: str) -> dict:
@@ -312,6 +316,16 @@ def _run_list_sync(url: str, *, app: str = "radarr", monitored: bool = True, sea
         else:
             failed.append(result["reason"])
             print(f"letterboxd-list: [{i}/{total_movies}] failed - {result['reason']}")
+
+    # Trigger Metacache warm for newly added movies (non-blocking)
+    if added and not dry_run:
+        try:
+            headers = {"Content-Type": "application/json"}
+            if METACACHE_API_KEY:
+                headers["Authorization"] = f"Bearer {METACACHE_API_KEY}"
+            httpx.post(f"{METACACHE_URL}/warm/movies", headers=headers, timeout=5.0)
+        except Exception as e:
+            print(f"metacache warm trigger failed: {e}", file=__import__('sys').stderr)
 
     return {
         "added": added, "already": already, "failed": failed, "unmatched": unmatched,
