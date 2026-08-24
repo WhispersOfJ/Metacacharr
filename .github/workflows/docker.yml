@@ -159,20 +159,39 @@ jobs:
         # Uploads run on success AND failure (findings gate) so the SARIF always
         # lands in code scanning, but skip when the scan itself was skipped (e.g.
         # an earlier step failed) — no files exist then. Dependabot PRs run with a
-        # read-only token, so skip there too.
+        # read-only token, so skip there too. Best-effort: this repo is private,
+        # where code scanning needs GitHub Advanced Security, so the upload only
+        # succeeds once the repo is public (or GHAS is enabled) — the artifact
+        # upload below preserves the SARIF regardless.
         if: always() && github.actor != 'dependabot[bot]' && steps.trivy-image.outcome != 'skipped'
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image.sarif
 
       - name: Upload Trivy SARIF (config)
         if: always() && github.actor != 'dependabot[bot]' && steps.trivy-config.outcome != 'skipped'
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-config.sarif
 
       - name: Upload Trivy SARIF (monitoring images)
         if: always() && github.actor != 'dependabot[bot]' && steps.trivy-images.outcome != 'skipped'
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: sarif # directory of per-image SARIF files
+
+      - name: Upload SARIF artifacts
+        # The SARIF files always land here, downloadable from the run summary,
+        # even on a private repo where code-scanning upload is best-effort above.
+        if: always() && github.actor != 'dependabot[bot]'
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-sarif
+          path: |
+            trivy-image.sarif
+            trivy-config.sarif
+            sarif/*.sarif
+          if-no-files-found: ignore
