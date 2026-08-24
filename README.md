@@ -101,7 +101,8 @@ docker run -d --name metacache --network host metacache
 | `POST /warm/movies` / `/warm/shows` / `/warm/all` | Pre-populate the cache from Radarr/Sonarr; returns the run summary (or 409 while another warm is running) |
 | `POST /webhook/radarr` / `/webhook/sonarr` | Event-driven warm: warm the one movie/show named by the ARR webhook payload (`eventType: Test` → `{ "result": "ok" }`) |
 | `GET /warm/status` | Live warmer state: `{ isRunning, lastResult }` |
-| `GET /metrics` | Cache hit rate, per-kind item counts, upstream size, disk usage |
+| `GET /metrics` | Cache hit rate, per-kind item counts, upstream size, disk usage (JSON) |
+| `GET /metrics/prometheus` | Same metrics in Prometheus text exposition format (`_total` counters, `kind` labels) for scraping |
 | `GET /dashboard` | Minimal live dashboard: polls `/metrics` and renders hit rate, per-kind bars, and disk usage with a hit-rate sparkline (self-contained HTML, no external assets) |
 
 Localization via the `X-Plex-Language` header (or query param) is passed through to

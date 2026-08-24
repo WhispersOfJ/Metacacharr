@@ -734,6 +734,14 @@ in the endpoint — no external JS/CDN, so it works with the WAN down) that poll
 per-kind item bars, disk usage, and a 120-point hit-rate sparkline. Verified live
 in the Preview tab.
 
+**Prometheus scrape endpoint.** `GET /metrics/prometheus` renders the same data in
+Prometheus text exposition format (`text/plain; version=0.0.4`): counters carry
+the `_total` suffix (`metacache_cache_requests_total`), the hit ratio and size
+metrics are gauges, per-kind item counts use a `kind` label, and `metacache_db_bytes`
+is omitted entirely for `:memory:` stores (empty series are dropped, so an empty
+store emits no `metacache_items_by_kind` instances). Point a Prometheus/Grafana
+scraper at it and alert on hit-rate or disk drift.
+
 **Live run against real Radarr/Sonarr found three gaps (all fixed):** (1) a show
 whose content ratings had no US entry crashed `PeopleMapper.Select` —
 `FirstOrDefault` on a value-tuple list returns the default tuple `(null, null)`

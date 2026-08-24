@@ -40,6 +40,55 @@ public class MetricsEndpointTests : ProviderEndpointTestBase
     }
 
     [Fact]
+    public async Task Prometheus_metrics_are_served_in_text_format()
+    {
+        await Client.GetAsync("/library/metadata/tmdb-movie-105"); // three upstream misses
+
+        var response = await Client.GetAsync("/metrics/prometheus");
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/plain", response.Content.Headers.ContentType!.MediaType);
+        Assert.Contains("version=0.0.4", response.Content.Headers.ContentType!.ToString());
+        string body = await response.Content.ReadAsStringAsync();
+
+        // HELP/TYPE lines and the _total counter convention.
+        Assert.Contains("# HELP metacache_cache_requests_total", body);
+        Assert.Contains("# TYPE metacache_cache_requests_total counter", body);
+        Assert.Contains("# TYPE metacache_cache_hit_ratio gauge", body);
+        Assert.Contains("metacache_cache_requests_total ", body);
+        Assert.Contains("metacache_cache_hits_total 0", body);
+        Assert.Contains("metacache_cache_misses_total ", body);
+        Assert.Contains("metacache_cache_hit_ratio 0", body);
+
+        // No items warmed yet → the kind gauge has no instances (empty series are omitted).
+        Assert.DoesNotContain("metacache_items_by_kind", body);
+
+        // Every metric line is a well-formed number.
+        foreach (string line in body.Split('\n'))
+        {
+            if (line.Length == 0 || line.StartsWith('#'))
+                continue;
+            string value = line[(line.LastIndexOf(' ') + 1)..];
+            Assert.True(double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _),
+                $"not a number: {line}");
+        }
+
+        // A repeat fetch is served from cache: hits become the first-run request count.
+        await Client.GetAsync("/library/metadata/tmdb-movie-105");
+        string after = await Client.GetStringAsync("/metrics/prometheus");
+        Assert.DoesNotContain("metacache_cache_hits_total 0", after);
+        Assert.Contains("metacache_cache_hit_ratio 0.5", after);
+
+        // Warm one movie via the webhook → the kind label appears with its count.
+        await Client.PostAsync("/webhook/radarr",
+            JsonBody("""{"eventType":"Download","movie":{"id":1,"tmdbId":105,"title":"Back to the Future"}}"""));
+        string warmed = await Client.GetStringAsync("/metrics/prometheus");
+        Assert.Contains("metacache_items_by_kind{kind=\"movie\"} 1", warmed);
+
+        // :memory: store has no DB file — the metric is omitted, not NaN.
+        Assert.DoesNotContain("metacache_db_bytes", body);
+    }
+
+    [Fact]
     public async Task Metrics_reflect_cache_hits_and_disk_usage()
     {
         // First metadata fetch: all upstream misses.
