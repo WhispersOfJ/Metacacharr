@@ -4,6 +4,7 @@ using Metacache.Core.Matching;
 using Metacache.Core.Providers;
 using Metacache.Host;
 using Metacache.Plex;
+using Metacache.Plex.Warming;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -56,7 +57,11 @@ var arrOptions = new ArrOptions(
     SonarrUrl: arrSection["SonarrUrl"] ?? "",
     SonarrApiKey: arrSection["SonarrApiKey"] ?? "",
     Concurrency: arrSection.GetValue<int?>("Concurrency") ?? 4);
-builder.Services.AddMetacacheWarming(arrOptions);
+var warmSection = builder.Configuration.GetSection("Metacache:Warm");
+var warmOptions = new WarmOptions(
+    Enabled: warmSection.GetValue<bool?>("Enabled") ?? true,
+    ScheduleTime: warmSection["ScheduleTime"] ?? "03:00");
+builder.Services.AddMetacacheWarming(arrOptions, warmOptions);
 
 builder.Services.AddHttpLogging(o =>
 {
@@ -73,6 +78,7 @@ app.MapCacheAdminEndpoints();
 app.MapImageEndpoints();
 app.MapWarmEndpoints();
 app.MapMetricsEndpoints();
+app.MapMetricsDashboard();
 app.MapGet("/healthz", () => Results.Text("ok", "text/plain"));
 
 app.Run();

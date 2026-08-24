@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using Metacache.Core.Cache;
 using Metacache.Host.Tests.Cache;
@@ -87,6 +88,55 @@ public class WarmEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Radarr_webhook_warms_the_imported_movie()
+    {
+        var response = await Client.PostAsync("/webhook/radarr",
+            JsonBody("""{"eventType":"Download","movie":{"id":1,"tmdbId":105,"title":"Back to the Future"}}"""));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        var store = _factory.Services.GetRequiredService<CacheStore>();
+        Assert.Equal(1, store.CountItemsByKind()["movie"]);
+        Assert.Contains(_upstream.Requests, r => r.Url.AbsolutePath.Contains("/movie/105", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Sonarr_webhook_warms_the_imported_show()
+    {
+        var response = await Client.PostAsync("/webhook/sonarr",
+            JsonBody("""{"eventType":"Download","series":{"id":1,"tvdbId":152831,"title":"Adventure Time"}}"""));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        var store = _factory.Services.GetRequiredService<CacheStore>();
+        IReadOnlyDictionary<string, int> byKind = store.CountItemsByKind();
+        Assert.Equal(1, byKind["show"]);
+        Assert.Equal(2, byKind["season"]);
+        Assert.Equal(3, byKind["episode"]);
+    }
+
+    [Fact]
+    public async Task Webhook_test_button_is_acknowledged_without_warming()
+    {
+        var response = await Client.PostAsync("/webhook/radarr",
+            JsonBody("""{"eventType":"Test"}"""));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("ok", doc.RootElement.GetProperty("result").GetString());
+
+        var store = _factory.Services.GetRequiredService<CacheStore>();
+        Assert.Empty(store.CountItemsByKind());
+    }
+
+    [Fact]
+    public async Task Malformed_webhook_returns_400()
+    {
+        var response = await Client.PostAsync("/webhook/sonarr",
+            new StringContent("not json", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Warm_status_reports_the_last_run()
     {
         var before = JsonDocument.Parse(await Client.GetStringAsync("/warm/status"));
@@ -101,4 +151,6 @@ public class WarmEndpointsTests : IDisposable
         Assert.Equal("all", last.GetProperty("source").GetString());
         Assert.True(last.GetProperty("itemsWarmed").GetInt32() > 0);
     }
+
+    private static StringContent JsonBody(string json) => new(json, Encoding.UTF8, "application/json");
 }

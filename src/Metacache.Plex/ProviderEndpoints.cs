@@ -22,7 +22,8 @@ public static class ProviderEndpoints
     {
         app.MapGet("/", () => Results.Text(
             "Metacache metadata provider. Definitions: GET /movie, GET /tv. Match: POST /library/metadata/matches. "
-            + "Metadata: GET /library/metadata/{ratingKey}. Health: GET /healthz.",
+            + "Metadata: GET /library/metadata/{ratingKey}. Dashboard: GET /dashboard. Metrics: GET /metrics. "
+            + "Health: GET /healthz.",
             "text/plain"));
 
         app.MapGet("/movie", () => Results.Json(ProviderCatalog.Movie, ProviderJson.Options));

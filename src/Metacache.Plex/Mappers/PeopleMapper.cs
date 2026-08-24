@@ -69,10 +69,15 @@ public static class PeopleMapper
     {
         string want = (country ?? "US").ToUpperInvariant();
 
+        // FirstOrDefault on a value-tuple list returns the default tuple (null, null)
+        // — never null — so test the tuple's Iso, not the tuple itself, before use.
         var preferred = entries.FirstOrDefault(e => string.Equals(e.Iso, want, StringComparison.OrdinalIgnoreCase));
-        (string? Iso, List<string?> Values)? match = preferred;
-        if (match is null || match.Value.Values.All(string.IsNullOrEmpty))
-            match = entries.FirstOrDefault(e => e.Values.Any(v => !string.IsNullOrEmpty(v)));
+        (string? Iso, List<string?> Values)? match = preferred.Iso is null ? null : preferred;
+        if (match is null || match.Value.Values is not { } values || values.All(string.IsNullOrEmpty))
+        {
+            var fallback = entries.FirstOrDefault(e => e.Values.Any(v => !string.IsNullOrEmpty(v)));
+            match = fallback.Iso is null ? null : fallback;
+        }
         if (match is null)
             return null;
 

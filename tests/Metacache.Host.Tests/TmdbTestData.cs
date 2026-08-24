@@ -389,7 +389,9 @@ public static class TmdbTestData
                 return Json(ShowContentRatingsJson);
             if (path.EndsWith("/tv/15260/external_ids", StringComparison.Ordinal))
                 return Json(ShowExternalIdsJson);
-            if (path.EndsWith("/tv/15260/season/1/episode/1", StringComparison.Ordinal))
+            if (path.EndsWith("/tv/15260/season/1/episode/1", StringComparison.Ordinal)
+                || path.EndsWith("/tv/15260/season/1/episode/2", StringComparison.Ordinal)
+                || path.EndsWith("/tv/15260/season/2/episode/1", StringComparison.Ordinal))
                 return Json(Episode11Json);
             if (path.EndsWith("/tv/15260/season/1", StringComparison.Ordinal))
                 return Json(Season1Json);

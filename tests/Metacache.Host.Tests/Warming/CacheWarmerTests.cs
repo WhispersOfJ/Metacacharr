@@ -83,6 +83,9 @@ public class CacheWarmerTests : IDisposable
         Assert.Equal(1, byKind["show"]);
         Assert.Equal(2, byKind["season"]);
         Assert.Equal(3, byKind["episode"]);
+
+        // Plex asks for episode metadata via the dedicated episode endpoint — warmed too.
+        Assert.Contains(_upstream.Requests, r => r.Url.AbsolutePath.EndsWith("/tv/15260/season/1/episode/1", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -103,5 +106,21 @@ public class CacheWarmerTests : IDisposable
 
         Assert.True(result.Skipped);
         Assert.Equal(0, result.ItemsWarmed);
+    }
+
+    [Fact]
+    public async Task Failed_warm_resets_the_running_flag_and_releases_the_gate()
+    {
+        _upstream.Route(arrMovies: TmdbTestData.RadarrMoviesJson);
+        CacheWarmer warmer = Warmer;
+
+        // tmdb 999999999 → upstream 404 → the warm throws (regression: status stuck at isRunning).
+        await Assert.ThrowsAsync<TmdbNotFoundException>(() => warmer.WarmMovieAsync(999999999));
+        Assert.False(warmer.Status.IsRunning);
+
+        // The gate was released: a subsequent warm still runs.
+        WarmResult? retry = await warmer.WarmMovieAsync(105);
+        Assert.NotNull(retry);
+        Assert.Equal(1, retry!.ItemsWarmed);
     }
 }

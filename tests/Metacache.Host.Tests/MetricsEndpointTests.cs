@@ -26,6 +26,20 @@ public class MetricsEndpointTests : ProviderEndpointTestBase
     }
 
     [Fact]
+    public async Task Dashboard_is_served_as_a_self_contained_html_page()
+    {
+        var response = await Client.GetAsync("/dashboard");
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
+        string html = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Metacache", html);
+        Assert.Contains("hitRate", html);      // polls /metrics by name
+        Assert.Contains("/metrics", html);     // and fetches it live
+        Assert.Contains("<script>", html);     // self-contained, no external assets
+    }
+
+    [Fact]
     public async Task Metrics_reflect_cache_hits_and_disk_usage()
     {
         // First metadata fetch: all upstream misses.

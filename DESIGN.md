@@ -442,6 +442,7 @@ Plex changes the API (it will — it's brand new), you change one folder.
   (hit rate, per-provider counts, disk usage); manual purge + TTL tuning; stale-if-error
   offline mode. *DoD:* unplug the WAN and a full library refresh still completes.
   **Shipped** — see §18 (dashboard UI and the remaining tuning knobs still to come).
+  Scheduled nightly + webhook-driven warming are included.
 - **M4 — ARR proxy face:** transparent caching reverse proxy for
   `api.themoviedb.org`/`image.tmdb.org`/`api.thetvdb.com`/`webservice.fanart.tv` with
   DNS override (§10); local CA + per-hostname certs; multi-language warm; music
@@ -717,7 +718,35 @@ stale-if-error), so `GET /metrics` reports a live hit rate without scanning the 
 The endpoint also reports upstream-cache entries/bytes, per-kind item counts, image
 files/bytes on disk, and the SQLite file size (`null` for `:memory:`).
 
-**Deferred to M4+:** the scheduled (nightly) warm, event-driven warming on ARR
-webhooks, a dashboard UI, trending/popular search warm-up, and the remaining M3
-tuning knobs (manual TTL tuning). `items` rows are written by the warmer only —
+**Scheduling and webhooks.** The nightly warm is a `BackgroundService`
+(`ScheduledWarmHostedService`) that waits for the next occurrence of
+`Metacache:Warm:ScheduleTime` (default 03:00, `HH:mm`) via a `TimeProvider`-based
+delay (unit-tested with a fake clock) and runs `/warm/all`. Event-driven warming:
+`POST /webhook/radarr` and `/webhook/sonarr` parse the ARR webhook payload
+(`eventType: Test` is acknowledged, otherwise the `movie.tmdbId` / `series.tvdbId`
+is warmed via the single-item `WarmMovieAsync`/`WarmShowByTvdbAsync` paths, which
+reuse the exact same per-item logic as the full-library runs; 409 while a warm is
+in flight). Point Sonarr/Radarr's webhook connections at these URLs.
+
+**Dashboard.** `GET /dashboard` serves a minimal, self-contained HTML page (embedded
+in the endpoint — no external JS/CDN, so it works with the WAN down) that polls
+`/metrics` every 3 s and renders the hit rate (color-coded), request counters,
+per-kind item bars, disk usage, and a 120-point hit-rate sparkline. Verified live
+in the Preview tab.
+
+**Live run against real Radarr/Sonarr found three gaps (all fixed):** (1) a show
+whose content ratings had no US entry crashed `PeopleMapper.Select` —
+`FirstOrDefault` on a value-tuple list returns the default tuple `(null, null)`
+(never null), so `match is null` never fired and `.All` ran on the null `Values`
+list; the selector now checks the tuple's `Iso` instead. (2) A warm that threw
+left `/warm/status` stuck at `isRunning: true`; `RunAsync` now resets the status
+on failure. (3) The show warm fetched seasons (with embedded episodes) but not the
+dedicated per-episode endpoint Plex uses, so the first refresh paid one call per
+episode; the warm now fetches every episode endpoint too. After the fixes, a full
+refresh of the warmed subset (movies + show + seasons + all 40 episode requests)
+added **zero** upstream calls.
+
+**Deferred to M4+:** trending/popular search warm-up, episode-level webhook warming
+(webhooks currently warm the whole imported show), and the remaining M3 tuning
+knobs (manual TTL tuning). `items` rows are written by the warmer only —
 provider-served lookups don't yet record rows, so per-kind counts reflect warm runs.

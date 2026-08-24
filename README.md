@@ -37,6 +37,9 @@ See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
   `/warm/all` turn the ARR libraries into the cache inventory — every movie/show/
   season/episode is fetched through the cached provider services and its artwork is
   pulled into the local image cache, with concurrency limits and a status endpoint.
+  A nightly scheduled warm (`Metacache:Warm`) runs `/warm/all` automatically, and
+  `POST /webhook/radarr` + `/webhook/sonarr` warm single items the moment Sonarr or
+  Radarr reports a new import (point their webhook settings at these URLs).
 - **Metrics dashboard (M3):** `GET /metrics` reports cache hit rate (live request
   counters), per-kind item counts, upstream-cache size, and disk usage (image files
   + SQLite DB).
@@ -69,6 +72,8 @@ dotnet run --project src/Metacache.Host
 | `Metacache__Arr__RadarrUrl` / `RadarrApiKey` | *(none)* | Radarr instance + API key for `/warm/movies` (blank URL disables the source) |
 | `Metacache__Arr__SonarrUrl` / `SonarrApiKey` | *(none)* | Sonarr instance + API key for `/warm/shows` (blank URL disables the source) |
 | `Metacache__Arr__Concurrency` | `4` | How many items a warm run processes in parallel |
+| `Metacache__Warm__Enabled` | `true` | Nightly scheduled warm on/off |
+| `Metacache__Warm__ScheduleTime` | `03:00` | Wall-clock time for the nightly warm (`HH:mm`) |
 
 Env vars override `appsettings.json`, e.g.:
 
@@ -94,8 +99,10 @@ docker run -d --name metacache --network host metacache
 | `GET /library/metadata/{ratingKey}/grandchildren` | All episodes of a show, paged |
 | `GET /library/metadata/{ratingKey}/images` | All image assets for the item |
 | `POST /warm/movies` / `/warm/shows` / `/warm/all` | Pre-populate the cache from Radarr/Sonarr; returns the run summary (or 409 while another warm is running) |
+| `POST /webhook/radarr` / `/webhook/sonarr` | Event-driven warm: warm the one movie/show named by the ARR webhook payload (`eventType: Test` → `{ "result": "ok" }`) |
 | `GET /warm/status` | Live warmer state: `{ isRunning, lastResult }` |
 | `GET /metrics` | Cache hit rate, per-kind item counts, upstream size, disk usage |
+| `GET /dashboard` | Minimal live dashboard: polls `/metrics` and renders hit rate, per-kind bars, and disk usage with a hit-rate sparkline (self-contained HTML, no external assets) |
 
 Localization via the `X-Plex-Language` header (or query param) is passed through to
 TMDB and used for the match language tiebreak; `X-Plex-Country` picks the content
