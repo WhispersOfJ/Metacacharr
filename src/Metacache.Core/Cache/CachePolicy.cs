@@ -33,3 +33,17 @@ public sealed record ItemDescriptor(
     string Lang);
 
 public sealed record ItemFetchResult(string Json, string? ETag);
+
+/// <summary>Filters for the queryable cache index (§19 `GET /items`, §21 browse).</summary>
+public sealed record ItemSearch(
+    IReadOnlyList<string>? Kinds = null,
+    string? TitleLike = null,
+    IReadOnlyList<string>? SourceIds = null,
+    bool FreshOnly = false,
+    int Limit = 50,
+    int Offset = 0,
+    int? Year = null,
+    bool RecentFirst = false);
+
+/// <summary>One page of index results plus the unfiltered-by-limit total.</summary>
+public sealed record ItemSearchResult(IReadOnlyList<CachedItem> Items, int Total);

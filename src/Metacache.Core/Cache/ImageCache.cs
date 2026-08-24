@@ -1,4 +1,7 @@
 using Microsoft.Extensions.Logging;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Processing;
 
 namespace Metacache.Core.Cache;
 
@@ -12,6 +15,18 @@ public enum ImageSource
 }
 
 public sealed record ImageResult(string Hash, string Path, string ContentType, ImageSource Source);
+
+/// <summary>
+/// The allowed longest-side sizes for sized image variants (DESIGN.md §21) — TMDB-style
+/// thumb steps. Bounding the set keeps the variant cache finite: at most one file per
+/// size per original, so a client can't fill the disk with arbitrary-size requests.
+/// </summary>
+public static class ImageSizes
+{
+    public static readonly IReadOnlyList<int> Allowed = [92, 154, 185, 342, 500, 780, 1280];
+
+    public static bool IsAllowed(int size) => Allowed.Contains(size);
+}
 
 /// <summary>
 /// The image cache (DESIGN.md §7.3): content-addressed files keyed by the sha256 of the
@@ -94,6 +109,76 @@ public sealed class ImageCache
     {
         CachedUrl? row = _cache.GetUrl(hash);
         return row is null ? null : await GetOrFetchAsync(row.Url, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A sized variant of a cached image (DESIGN.md §21): <paramref name="size"/> is the
+    /// longest-side bound, from <see cref="ImageSizes.Allowed"/>. The variant is resized
+    /// locally from the stored original (fetching the original first if needed), written
+    /// once and served from disk after that; originals smaller than the request (or not
+    /// decodable) are served unmodified. Returns null for unknown hashes or disallowed sizes.
+    /// </summary>
+    public async Task<ImageResult?> GetVariantAsync(string hash, int size, CancellationToken cancellationToken = default)
+    {
+        if (!ImageSizes.IsAllowed(size))
+            return null;
+
+        CachedUrl? row = _cache.GetUrl(hash);
+        if (row is null)
+            return null;
+
+        if (_store.VariantExists(hash, size))
+            return new ImageResult(hash, _store.GetVariantPath(hash, size), "image/jpeg", ImageSource.Cache);
+
+        ImageResult original = await GetOrFetchAsync(row.Url, cancellationToken).ConfigureAwait(false);
+        Task<ImageResult> task = _flight.RunAsync($"{hash}|v{size}",
+            () => Task.FromResult(ResizeCore(hash, size, original.Path, original.ContentType)));
+        return await task.ConfigureAwait(false);
+    }
+
+    private ImageResult ResizeCore(string hash, int size, string originalPath, string originalContentType)
+    {
+        // Another caller may have written the variant while we waited for the flight.
+        if (_store.VariantExists(hash, size))
+            return new ImageResult(hash, _store.GetVariantPath(hash, size), "image/jpeg", ImageSource.Cache);
+
+        try
+        {
+            using Image image = Image.Load(originalPath);
+            if (Math.Max(image.Width, image.Height) <= size)
+            {
+                // Never upscale — the original already fits the request.
+                return new ImageResult(hash, originalPath, originalContentType, ImageSource.Cache);
+            }
+
+            image.Mutate(x => x.Resize(new ResizeOptions
+            {
+                Mode = ResizeMode.Max,
+                Size = new Size(size, size)
+            }));
+            using var ms = new MemoryStream();
+            image.Save(ms, new JpegEncoder { Quality = 85 });
+            string path = _store.StoreVariant(hash, size, ms.ToArray());
+            _logger.LogDebug("Resized {Hash} to longest side {Size}", hash, size);
+            return new ImageResult(hash, path, "image/jpeg", ImageSource.Cache);
+        }
+        catch (UnknownImageFormatException)
+        {
+            _logger.LogDebug("Original for {Hash} is not a decodable image; serving it unmodified", hash);
+            return new ImageResult(hash, originalPath, originalContentType, ImageSource.Cache);
+        }
+        catch (InvalidImageContentException)
+        {
+            _logger.LogDebug("Original for {Hash} is corrupt; serving it unmodified", hash);
+            return new ImageResult(hash, originalPath, originalContentType, ImageSource.Cache);
+        }
+        catch (FileNotFoundException)
+        {
+            // The original was evicted or deleted between the GetVariantAsync check and now.
+            // Serve the original path — it will 404 at the endpoint level, which is correct.
+            _logger.LogDebug("Original for {Hash} vanished before resize; serving original path", hash);
+            return new ImageResult(hash, originalPath, originalContentType, ImageSource.Cache);
+        }
     }
 
     private async Task<ImageResult> FetchCoreAsync(string hash, string url)

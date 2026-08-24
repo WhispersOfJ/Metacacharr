@@ -82,6 +82,56 @@ public sealed partial class ImageStore
         string path = GetFilePath(hash);
         if (File.Exists(path))
             File.Delete(path);
+        DeleteVariants(hash);
+    }
+
+    // ---- sized variants (DESIGN.md §21) ----
+
+    /// <summary>Variant files live next to the original, suffixed with the longest-side size.</summary>
+    public string GetVariantPath(string hash, int size)
+    {
+        if (!IsValidHash(hash))
+            throw new ArgumentException("Image hash must be 64 lowercase hex characters", nameof(hash));
+        return Path.Combine(_root, hash[..2], $"{hash}.{size}.jpg");
+    }
+
+    public bool VariantExists(string hash, int size) =>
+        IsValidHash(hash) && File.Exists(GetVariantPath(hash, size));
+
+    /// <summary>Writes a resized JPEG variant atomically (temp + move, like the originals).</summary>
+    public string StoreVariant(string hash, int size, byte[] body)
+    {
+        if (!IsValidHash(hash))
+            throw new ArgumentException("Image hash must be 64 lowercase hex characters", nameof(hash));
+
+        string path = GetVariantPath(hash, size);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+        string temp = path + ".tmp." + Guid.NewGuid().ToString("N");
+        File.WriteAllBytes(temp, body);
+        File.Move(temp, path, overwrite: true);
+        return path;
+    }
+
+    /// <summary>Removes every sized variant of an original (called when the original is evicted).</summary>
+    public void DeleteVariants(string hash)
+    {
+        if (!IsValidHash(hash))
+            return;
+        string dir = Path.Combine(_root, hash[..2]);
+        if (!Directory.Exists(dir))
+            return;
+        foreach (string file in Directory.EnumerateFiles(dir, $"{hash}.*.jpg"))
+        {
+            try
+            {
+                File.Delete(file);
+            }
+            catch (IOException)
+            {
+                // Concurrent eviction — the file is already gone or busy; skip.
+            }
+        }
     }
 
     [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.Compiled)]

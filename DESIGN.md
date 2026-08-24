@@ -612,6 +612,49 @@ header, so TVDB latency lands in the per-provider duration histogram
 (`provider="api4.thetvdb.com"`). A blank `Metacache:Tvdb:ApiKey` throws
 `TvdbConfigurationException` on use; fallbacks then simply never fire.
 
+### 15.9 (reserved)
+
+### 15.10 Manual match overrides & unmatched capture
+
+Plex re-matches the same items on every library refresh, so a title that scores below
+the auto threshold (or that TMDB simply can't find) fails forever and needs a manual
+Fix Match every time. This section makes those corrections **persistent**: a pinned
+override is consulted before any upstream search, so the fix sticks across refreshes.
+
+**Override keys.** Every match hint derives a deterministic lookup key
+(`MatchOverrideKeys.ForHint`): the request guid when Plex sent one (Plex re-sends the
+guid it stored after a manual fix, so a guid-keyed pin fires on every refresh),
+otherwise a normalized `kind:title:year` (season uses the parent show title, episode
+the grandparent show title; titles are lowercased and whitespace-collapsed).
+
+**Consult-before-search.** `POST /library/metadata/matches` looks up the override for
+the hint's key first. A hit resolves the pinned target (`tmdb-movie-…`, `tmdb-show-…`,
+`tmdb-season-…`, `tmdb-episode-…` — all parsed via `RatingKey`) through the cached
+provider services and returns it directly: **auto** mode answers with just the pin; a
+**manual** Fix Match returns the pin first, followed by the ranked candidates
+(deduped). If the pinned target 404s upstream (deleted title), the pin falls back to
+normal matching rather than failing the refresh. Pinned hints are admin-owned, so a
+broken pin is never recorded as unmatched.
+
+**Unmatched capture.** An **auto** match that returns zero candidates is a genuine
+failure — the hint (title, year, guid, filename, parent/grandparent titles, indexes,
+air date) is recorded in the `unmatched` table, keyed the same way the consult path
+reads, with a counter bumped on recurrence and a `last_seen_at` for triage.
+
+**Admin surface** (`MatchOverrideEndpoints`):
+
+- `GET /admin/overrides` — list pins; `POST /admin/overrides` — create/replace a pin
+  (`key`, `kind`, `target` tmdb rating key, optional `notes`; validates kind/target
+  consistency); `DELETE /admin/overrides/{key}` — remove a pin.
+- `GET /admin/unmatched` — review failures (count + last seen);
+  `POST /admin/unmatched/{key}/pin` — create the override from an entry and drop it
+  (the one-click fix loop); `DELETE /admin/unmatched/{key}` — dismiss a single entry;
+  `DELETE /admin/unmatched` — clear all.
+
+Storage is two `CREATE TABLE IF NOT EXISTS` tables in the existing SQLite store
+(`match_overrides`, `unmatched`), added as schema **v2** so v1 databases upgrade in
+place (`PRAGMA user_version`).
+
 ---
 
 ## 16. M1 — movies shipped (implementation notes)
@@ -832,3 +875,151 @@ added **zero** upstream calls.
 (webhooks currently warm the whole imported show), and the remaining M3 tuning
 knobs (manual TTL tuning). `items` rows are written by the warmer only —
 provider-served lookups don't yet record rows, so per-kind counts reflect warm runs.
+
+---
+
+## 19. Queryable cache index — items search + GUID lookup (shipped)
+
+The normalized `items` table exists since M1 but nothing could *query* it — this
+section turns it into the stack's local metadata API (the "metadata database" pivot
+from the M3 brainstorm): `GET /items` searches the index, `GET /guid/lookup`
+translates any GUID across imdb/tmdb/tvdb. Every tool in the stack (Overseerr,
+Tautulli, scripts, a future Plex search integration) can now ask Metacache instead
+of TMDB.
+
+**Schema v3: the index columns.** `items` gains `title TEXT` and `year INTEGER`,
+plus `ix_items_title`. Fresh databases get them in `CREATE TABLE`; v1/v2 databases
+are upgraded in place by `ALTER TABLE` steps in `EnsureSchema`, each guarded by a
+`pragma_table_info` column check so re-runs are idempotent (`PRAGMA user_version`
+moves 2 → 3). `CachedItem` carries the new fields, and `CacheStore.PutItem` upserts
+them. The warmer (`RecordItem`) now records titles/years derived from the TMDB
+objects it already fetches — a movie's `title` + `release_date` year, a show's
+`name` + `first_air_date` year, seasons inheriting the show's, episodes using
+their own `air_date` year — so a warmed library is searchable by title with no
+extra upstream calls.
+
+**`GET /items` — search the index.** Filters (all optional, combined):
+`kind` (movie/show/season/episode), `q` (case-insensitive title substring —
+`LIKE ... ESCAPE '\'` with `%`/`_`/`\` escaped so queries match literally),
+`guid` (any GUID the lookup service accepts — resolved to its tmdb source id(s)
+first, so `?guid=imdb://tt0088763` finds the cached item; an unresolvable guid is
+404), and `fresh=true` (only rows with `expires_at > now`). `limit` defaults to 50
+(max 500). Response is `{ total, items: [...] }` — `total` counts without the
+limit, `items` are `{ id, kind, source, sourceId, lang, title, year, fetchedAt,
+expiresAt }` sorted case-insensitively by title. Parameter validation: bad kind /
+fresh / limit → 400. All filtering happens in SQL (`SearchItems`), so it scales
+with the index rather than loading rows.
+
+**`GET /guid/lookup` — translate across sources.** `GuidLookupService` parses
+`imdb://tt…`, `tvdb://…`, `tmdb://…`, Plex rating keys (`tmdb-movie-105`,
+`tmdb-show-15260`, season/episode keys resolving at the show level), and bare
+forms (`tt…` = imdb, digits = tmdb). Resolution walks the cached TMDB client:
+imdb → `/find` (movie results first, then tv), tvdb → `/find` by `tvdb_id`,
+tmdb → the rating-key kind or, for a bare id, the local index's kind — falling
+back to a show-then-movie probe (the probed 404 is cached). Movie equivalents
+come from `/movie/{id}` (imdb), show equivalents from `/tv/{id}` + `/tv/{id}/external_ids`
+(imdb + tvdb). The response echoes `{ guid, kind, title, year, imdb, tmdb, tvdb,
+tmdbId, itemId, cached }` — `itemId`/`cached` report whether the title is in the
+local index (a movie is `movie-{id}`, a show `show-{id}`, matching the warmer's id
+scheme). First lookup of a guid pays 2–3 upstream calls; every repeat is served
+entirely from cache (find + details are cached by the gateway). Unknown guid → 404.
+
+**Design notes.** Both endpoints are read-only and mounted outside `/admin` — they
+are the cache index API, not admin tools. The index is as fresh as the last warm
+(the warmer is the only writer), so title search answers "what's in my warmed
+library", while guid lookup is cache-backed but always resolvable (it fills from
+upstream on demand). Movies have no tvdb equivalent in TMDB, so `tvdb` is null for
+movie lookups by construction; the equivalence set is whatever TMDB actually
+knows.
+
+---
+
+## 20. Predictive warming — the Plex play-event webhook (shipped)
+
+The full-library warm covers everything the ARR apps know about, but the first play
+of anything new still pays upstream. Predictive warming inverts that: on
+**playback start**, Plex tells us exactly what the user is about to watch next, so
+Metacache pre-fetches the played item, the next episodes, and similar titles — the
+next autoplay is a pure cache hit.
+
+**`POST /webhook/plex`** consumes the standard Plex webhook JSON (`PlexPlayParser`
+— case-insensitive property lookup for cross-PMS-version tolerance). Only
+`event: media.play` (playback start) triggers a warm; every other event (`pause`,
+`stop`, `scrobble`, the settings test button) answers `{ "result": "ignored" }`
+without touching the cache, and malformed bodies are 400. Non-movie/episode
+metadata types (`track`, `clip`, `photo`) are ignored too. While any other warm is
+in flight the webhook answers 409, same as the ARR webhooks.
+
+**Resolution is best-effort** (`CacheWarmer.WarmPredictiveAsync`, published as a
+`predictive` run in the warm status/metrics):
+
+- **Movie** — the metadata `Guid[]` (plus the legacy `guid` field) is scanned for
+  `tmdb://`/`imdb://`/`tvdb://` entries and resolved through `GuidLookupService`
+  (cached find); with no usable guid, the title+year falls back to the normal
+  movie auto-match. Unresolvable → the run reports `missing: 1` and does nothing.
+- **Episode** — the show is resolved from a show-level guid if present, otherwise
+  by auto-matching `grandparentTitle` (+year). (Episode-level guids can't route to
+  a show, so title matching is the primary path.) Then `WarmShowAroundAsync`
+  warms the show card (metadata + artwork), the played season, and the played
+  episode plus the next three in the season — the autoplay queue. If the played
+  episode is the season finale, the next season's metadata and first two episodes
+  are primed too, so the queue crosses the season boundary without a miss.
+
+**Related titles** come from TMDB's similarity relation — new `GetSimilarMoviesAsync`
+/ `GetSimilarShowsAsync` client methods (`/movie/{id}/similar`, `/tv/{id}/similar`,
+search policy TTL). The top `SimilarDepth` (3) are warmed per play: movies fully
+(`WarmOneMovieAsync`, details + artwork), shows as cards only (metadata + artwork,
+no season crawl) so a play event stays bounded — one movie play costs ~15
+cached-upstream calls, all behind 12–24 h TTLs and single-flight.
+
+**Setup:** in Plex, Settings → Webhooks → add a webhook pointing at
+`http://<metacache-host>:8765/webhook/plex`. The warmer answers the connection
+test with `ignored` (no test event ever warms anything).
+
+---
+
+## 21. Library browse + sized image variants (shipped)
+
+The provider definitions previously advertised only `metadata` and `match`, and
+`/img` served one (original) size. This section adds the browse surface — so a
+library can be searched and listed **entirely from the local cache** — and
+locally-resized image variants for lightweight list views.
+
+**Browse endpoints** (`LibraryBrowseEndpoints`, advertised in `ProviderCatalog` as
+the `search` and `recentlyAdded` features):
+
+- `GET /library/search?title=&kind=movie|show&year=` — searches the warmed index
+  (case-insensitive title substring via the §19 `SearchItems`, optional exact year)
+  and returns a Plex-shaped `MediaContainer`.
+- `GET /library/recentlyAdded` — the most recently warmed items (index ordered by
+  `fetched_at`).
+
+Both page with the standard `X-Plex-Container-Size`/`Start` headers (offset is
+applied in SQL, like `/children`) and return **movies and shows only** — seasons
+and episodes are `/items` territory, not library-browse rows. Mixed results carry
+the generic container identifier; single-kind requests echo the movie/tv provider
+identifier. Every row is built from the index (`BrowseMapper`) with an exact
+tmdb rating key + guid, so a click routes straight to a cache-hit metadata fetch.
+
+**Schema v4: `items.thumb`.** The warmer records the rewritten `/img/{hash}`
+artwork path for every row (poster for movies/shows/seasons, still for episodes),
+so browse rows carry artwork without touching upstream. `EnsureSchema` adds the
+column in place for older databases, exactly like v3's title/year.
+
+**Sized image variants** (`GET /img/{hash}?width=N`). The size set is a bounded,
+TMDB-style list of longest-side steps — `ImageSizes.Allowed` = 92/154/185/342/500/
+780/1280 — so the variant cache stays finite (one file per size per original; a
+client can't fill the disk with arbitrary-size requests; anything else is 400).
+On first request for a size, the stored original is resized locally with
+SixLabors.ImageSharp (3.1.x — the last Apache-compatible line; 4.x requires a
+commercial license key, so the pin is deliberate and Dependabot is configured to
+keep it on 3.1.x) into a JPEG variant written atomically next to the original
+(`{root}/{first2}/{hash}.{size}.jpg`), single-flighted per hash+size, and served
+from disk after that. Originals smaller than the requested size are never
+upscaled (the original is served), and undecodable originals (e.g. an SVG slipped
+through) fall back to the original bytes — a variant request can never fail a
+valid image. Evicting an original also removes its variants. Browse thumbs point
+at `?width=185` (`BrowseMapper.ThumbWidth`), so list views pull small images
+entirely from local disk.
+
+---

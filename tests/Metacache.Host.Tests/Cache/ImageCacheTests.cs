@@ -1,5 +1,8 @@
 using Metacache.Core.Cache;
 using Microsoft.Extensions.Logging.Abstractions;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace Metacache.Host.Tests.Cache;
 
@@ -173,5 +176,81 @@ public class ImageCacheTests : IDisposable
         Assert.Equal(a, b);
         Assert.StartsWith("/img/", a);
         Assert.NotEqual(a, c);
+    }
+
+    // ---- sized variants (§21) ----
+
+    [Fact]
+    public async Task Variant_resizes_caches_and_serves_from_disk()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => new UpstreamResponse(200, MakeJpeg(400, 200), "image/jpeg", null, null, null);
+        string hash = UpstreamCache.ComputeKey(Url);
+        await f.Cache.GetOrFetchAsync(Url); // warm the original
+
+        ImageResult variant = (await f.Cache.GetVariantAsync(hash, 185))!;
+
+        Assert.True(f.ImageStore.VariantExists(hash, 185));
+        Assert.Equal("image/jpeg", variant.ContentType);
+        using (Image decoded = Image.Load(variant.Path))
+        {
+            Assert.Equal(185, Math.Max(decoded.Width, decoded.Height)); // longest side bound
+            Assert.Equal(92, Math.Min(decoded.Width, decoded.Height)); // 2:1 aspect preserved
+        }
+
+        // Second call serves the cached variant without resizing again.
+        ImageResult cached = (await f.Cache.GetVariantAsync(hash, 185))!;
+        Assert.Equal(variant.Path, cached.Path);
+        Assert.Single(f.Upstream.Requests); // original fetched once; variant is local work
+    }
+
+    [Fact]
+    public async Task Variant_smaller_than_the_original_serves_the_original()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => new UpstreamResponse(200, MakeJpeg(64, 32), "image/jpeg", null, null, null);
+        string hash = UpstreamCache.ComputeKey(Url);
+        ImageResult original = await f.Cache.GetOrFetchAsync(Url);
+
+        // Smallest allowed size (92) still exceeds the 64px original — never upscale.
+        ImageResult variant = (await f.Cache.GetVariantAsync(hash, 92))!;
+        Assert.Equal(original.Path, variant.Path);
+        Assert.False(f.ImageStore.VariantExists(hash, 92));
+    }
+
+    [Fact]
+    public async Task Variant_unknown_hash_or_disallowed_size_returns_null()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => new UpstreamResponse(200, MakeJpeg(400, 200), "image/jpeg", null, null, null);
+
+        Assert.Null(await f.Cache.GetVariantAsync(new string('0', 64), 185));
+
+        string hash = UpstreamCache.ComputeKey(Url);
+        await f.Cache.GetOrFetchAsync(Url);
+        Assert.Null(await f.Cache.GetVariantAsync(hash, 13)); // not in the allowed size set
+    }
+
+    [Fact]
+    public async Task Evicting_the_original_removes_its_variants()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => new UpstreamResponse(200, MakeJpeg(400, 200), "image/jpeg", null, null, null);
+        string hash = UpstreamCache.ComputeKey(Url);
+        await f.Cache.GetOrFetchAsync(Url);
+        await f.Cache.GetVariantAsync(hash, 185);
+
+        f.ImageStore.Delete(hash);
+
+        Assert.False(f.ImageStore.VariantExists(hash, 185));
+    }
+
+    /// <summary>A real JPEG with the given dimensions (ImageSharp), so resize paths decode real data.</summary>
+    private static byte[] MakeJpeg(int width, int height)
+    {
+        using var image = new Image<Rgba32>(width, height, Color.RoyalBlue);
+        using var ms = new MemoryStream();
+        image.Save(ms, new JpegEncoder());
+        return ms.ToArray();
     }
 }

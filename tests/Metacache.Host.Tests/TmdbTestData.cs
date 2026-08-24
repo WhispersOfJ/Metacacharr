@@ -415,6 +415,45 @@ public static class TmdbTestData
         }
         """;
 
+    // ---- similar (predictive warm, §20) ----
+
+    /// <summary>/movie/105/similar — one similar movie (Back to the Future Part II).</summary>
+    public const string SimilarMoviesJson = """
+        {
+          "page": 1,
+          "results": [
+            { "adult": false, "id": 165, "title": "Back to the Future Part II", "original_title": "Back to the Future Part II", "release_date": "1989-11-22", "overview": "Marty travels to 2015.", "popularity": 40.1, "poster_path": "/bttf2-poster.jpg", "vote_average": 7.8 },
+            { "adult": false, "id": 999, "title": "Explicit", "original_title": "Explicit", "release_date": "2020-01-01", "overview": "Adult title.", "popularity": 5.0, "poster_path": "/exp-poster.jpg", "vote_average": 1.0 }
+          ]
+        }
+        """;
+
+    /// <summary>/tv/15260/similar — one similar show (Game of Thrones, id 1399).</summary>
+    public const string SimilarShowsJson = """
+        {
+          "page": 1,
+          "results": [
+            { "adult": false, "id": 1399, "name": "Game of Thrones", "original_name": "Game of Thrones", "first_air_date": "2011-04-17", "overview": "Winter is coming.", "popularity": 90.0, "poster_path": "/got-poster.jpg", "vote_average": 8.7 }
+          ]
+        }
+        """;
+
+    /// <summary>Minimal /tv/1399 details for the similar-show card.</summary>
+    public const string SimilarShowJson = """
+        {
+          "adult": false,
+          "backdrop_path": "/got-backdrop.jpg",
+          "first_air_date": "2011-04-17",
+          "genres": [ { "id": 18, "name": "Drama" } ],
+          "id": 1399,
+          "name": "Game of Thrones",
+          "original_name": "Game of Thrones",
+          "overview": "Winter is coming.",
+          "poster_path": "/got-poster.jpg",
+          "vote_average": 8.7
+        }
+        """;
+
     // ---- ARR (M3 warming) ----
 
     public const string RadarrMoviesJson = """
@@ -470,6 +509,9 @@ public static class TmdbTestData
                 return JsonStatus(404, """{ "status_code": 34 }""");
             if (path.EndsWith("/tv/15260", StringComparison.Ordinal))
                 return Json(TvShowJson);
+            // /tv/105 and /tv/165 404 — movie ids probed as shows (guid-lookup disambiguation).
+            if (path.EndsWith("/tv/105", StringComparison.Ordinal) || path.EndsWith("/tv/165", StringComparison.Ordinal))
+                return JsonStatus(404, """{ "status_code": 34 }""");
             if (path.EndsWith("/tv/999999999", StringComparison.Ordinal))
                 return JsonStatus(404, """{ "status_code": 34 }""");
             if (path.EndsWith("/movie/999999999", StringComparison.Ordinal))
@@ -478,8 +520,18 @@ public static class TmdbTestData
                 return Json(MovieCreditsJson);
             if (path.EndsWith("/movie/165/release_dates", StringComparison.Ordinal))
                 return Json(ReleaseDatesJson);
+            if (path.EndsWith("/movie/105/similar", StringComparison.Ordinal))
+                return Json(SimilarMoviesJson);
+            if (path.EndsWith("/tv/15260/similar", StringComparison.Ordinal))
+                return Json(SimilarShowsJson);
+            if (path.EndsWith("/tv/1399", StringComparison.Ordinal))
+                return Json(SimilarShowJson);
             if (path.EndsWith("/movie/165", StringComparison.Ordinal))
                 return Json(Movie165Json);
+            if (path.EndsWith("/movie/999/credits", StringComparison.Ordinal))
+                return Json(MovieCreditsJson);
+            if (path.EndsWith("/movie/999/release_dates", StringComparison.Ordinal))
+                return Json(ReleaseDatesJson);
             if (path.EndsWith("/movie/999", StringComparison.Ordinal))
                 return Json(Movie999Json);
             if (path.Contains("/movie/105", StringComparison.Ordinal))

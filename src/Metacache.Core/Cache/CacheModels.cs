@@ -40,7 +40,10 @@ public sealed record CachedUpstreamRow(
         new(Status, Body, ContentType, source);
 }
 
-/// <summary>Normalized metadata store row (DESIGN.md §7.4 `items`). Keyed by (id, lang).</summary>
+/// <summary>Normalized metadata store row (DESIGN.md §7.4 `items`). Keyed by (id, lang).
+/// <see cref="Title"/>/<see cref="Year"/> are the search index (schema v3) — populated
+/// by the warmer from the TMDB objects; null for rows written before v3 or by paths
+/// that don't know the title (id/guid search still works).</summary>
 public sealed record CachedItem(
     string Id,
     string Kind,
@@ -50,7 +53,10 @@ public sealed record CachedItem(
     string Json,
     DateTimeOffset FetchedAt,
     DateTimeOffset ExpiresAt,
-    string? ETag);
+    string? ETag,
+    string? Title = null,
+    int? Year = null,
+    string? Thumb = null);
 
 /// <summary>Image/asset row (DESIGN.md §7.4 `urls`). Hash = sha256 hex of the original URL.</summary>
 public sealed record CachedUrl(

@@ -50,6 +50,26 @@ public class ImageEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Sized_variant_endpoint_serves_and_validates_width()
+    {
+        _upstream.Handler = _ => new UpstreamResponse(200, TestBytes.Of("fake-jpeg-bytes"), "image/jpeg", null, null, null);
+        var images = _factory.Services.GetRequiredService<ImageCache>();
+        await images.GetOrFetchAsync(Url); // seed the original
+        string path = ImageCache.RewriteToLocalPath(Url);
+        var client = _factory.CreateClient();
+
+        // The fake bytes aren't decodable, so the variant path falls back to serving
+        // the original unmodified — the contract (200 + bytes) still holds.
+        var sized = await client.GetAsync($"{path}?width=185");
+        Assert.Equal(HttpStatusCode.OK, sized.StatusCode);
+        Assert.Equal("fake-jpeg-bytes", await sized.Content.ReadAsStringAsync());
+
+        // Disallowed sizes are rejected, not served.
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync($"{path}?width=13")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync($"{path}?width=abc")).StatusCode);
+    }
+
+    [Fact]
     public async Task Stored_url_refetches_when_the_file_is_missing()
     {
         const string url = "https://image.tmdb.org/t/p/original/lazy.png";

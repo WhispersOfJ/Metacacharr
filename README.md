@@ -35,6 +35,16 @@ See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
 - `GET /healthz` liveness check.
 - Admin surface: `GET /cache/stats` (cache sizes) and `POST /cache/purge` (expired-row
   cleanup), returning `{ "removed": n }`.
+- **Manual match pins (M4):** override a match permanently — `POST /admin/overrides`
+  pins a tmdb rating key to a title/guid, consulted before any upstream search on
+  every Plex refresh; auto matches that find zero candidates are captured under
+  `GET /admin/unmatched` and can be pinned in one click
+  (`POST /admin/unmatched/{key}/pin`), so repeated Fix Matches become one-time fixes.
+- **Queryable cache index:** `GET /items` searches the warmed library by title
+  (`q`), kind, guid (`?guid=imdb://tt0088763` resolves first) and freshness, and
+  `GET /guid/lookup` translates any `imdb://`/`tmdb://`/`tvdb://` GUID to all its
+  equivalents (cache-backed — repeats are pure cache hits). Every tool in the stack
+  can query Metacache instead of TMDB.
 - Image cache: artwork stored locally and served from `GET /img/{hash}` (content-
   addressed, per-file + total caps with oldest-first eviction, self-healing refetch).
 - Rating-key, GUID, and match-scoring utilities (movies, shows, seasons, episodes) with
@@ -153,12 +163,15 @@ docker run --rm -v metacache-data:/data alpine chown -R 1654:1654 /data
 | `GET /library/metadata/{ratingKey}/children` | Seasons of a show / episodes of a season, paged |
 | `GET /library/metadata/{ratingKey}/grandchildren` | All episodes of a show, paged |
 | `GET /library/metadata/{ratingKey}/images` | All image assets for the item |
+| `GET /library/search` / `GET /library/recentlyAdded` | **Library browse, entirely from cache:** search the warmed index by `title`/`kind`/`year` or list the most recently added — Plex-shaped containers with `?width=185` thumbs (paged via `X-Plex-Container-Size`/`Start`) |
 | `POST /warm/movies` / `/warm/shows` / `/warm/all` | Pre-populate the cache from Radarr/Sonarr; returns the run summary (or 409 while another warm is running) |
 | `POST /webhook/radarr` / `/webhook/sonarr` | Event-driven warm: warm the one movie/show named by the ARR webhook payload (`eventType: Test` → `{ "result": "ok" }`) |
+| `POST /webhook/plex` | **Predictive warm:** on playback start, resolves the played item and pre-fetches it, the next episodes (incl. next-season priming on a finale), and up to 3 similar titles — so the next autoplay is a cache hit (other events → `{ "result": "ignored" }`) |
 | `GET /warm/status` | Live warmer state: `{ isRunning, lastResult }` |
 | `GET /metrics` | Cache hit rate, per-kind item counts, upstream size, disk usage (JSON) |
 | `GET /metrics/prometheus` | Same metrics in Prometheus text exposition format (`_total` counters, `kind`/`provider` labels, request-duration histogram, TMDB rate-limit gauges + 429 counter) for scraping |
 | `GET /dashboard` | Minimal live dashboard: polls `/metrics` and renders hit rate, per-kind bars, and disk usage with a hit-rate sparkline overlaying live polling vs the last 120 Prometheus scrapes (self-contained HTML, no external assets) |
+| `GET /img/{hash}?width=N` | **Sized image variants:** locally-resized JPEG thumbnails (`width` ∈ 92/154/185/342/500/780/1280, longest-side bound), cached on disk — originals smaller than the request are served unmodified |
 
 Localization via the `X-Plex-Language` header (or query param) is passed through to
 TMDB and used for the match language tiebreak; `X-Plex-Country` picks the content

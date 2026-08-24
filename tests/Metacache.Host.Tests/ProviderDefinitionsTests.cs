@@ -31,6 +31,8 @@ public class ProviderDefinitionsTests : IClassFixture<WebApplicationFactory<Prog
 
         Assert.Contains(provider.Feature, f => f is { Type: "metadata", Key: "/library/metadata" });
         Assert.Contains(provider.Feature, f => f is { Type: "match", Key: "/library/metadata/matches" });
+        Assert.Contains(provider.Feature, f => f is { Type: "search", Key: "/library/search" });
+        Assert.Contains(provider.Feature, f => f is { Type: "recentlyAdded", Key: "/library/recentlyAdded" });
     }
 
     [Fact]

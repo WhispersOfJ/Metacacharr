@@ -128,6 +128,32 @@ public sealed class TmdbClient
         return await GetJsonAsync<TmdbFindResponse>(url, SearchPolicy, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Similar movies (the `/movie/{id}/similar` relation) — the predictive-warm
+    /// "related titles" source (§20). Cached under the search policy like other
+    /// discovery endpoints.
+    /// </summary>
+    public async Task<IReadOnlyList<TmdbMovieSummary>> GetSimilarMoviesAsync(
+        int movieId, string? language, CancellationToken cancellationToken = default)
+    {
+        var queryParams = new Dictionary<string, string?> { ["language"] = language ?? "en-US" };
+        string url = BuildUrl($"/movie/{movieId}/similar", queryParams);
+        TmdbSearchResponse? response = await GetJsonAsync<TmdbSearchResponse>(url, SearchPolicy, cancellationToken)
+            .ConfigureAwait(false);
+        return response?.Results ?? [];
+    }
+
+    /// <summary>Similar shows (`/tv/{id}/similar`) — the TV "related titles" source (§20).</summary>
+    public async Task<IReadOnlyList<TmdbShowSummary>> GetSimilarShowsAsync(
+        int showId, string? language, CancellationToken cancellationToken = default)
+    {
+        var queryParams = new Dictionary<string, string?> { ["language"] = language ?? "en-US" };
+        string url = BuildUrl($"/tv/{showId}/similar", queryParams);
+        TmdbTvSearchResponse? response = await GetJsonAsync<TmdbTvSearchResponse>(url, SearchPolicy, cancellationToken)
+            .ConfigureAwait(false);
+        return response?.Results ?? [];
+    }
+
     // ---- TV ----
 
     /// <summary>Searches TV shows by name, optionally narrowed by first-air year.</summary>

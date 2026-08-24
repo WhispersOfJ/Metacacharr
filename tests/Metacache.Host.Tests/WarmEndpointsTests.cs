@@ -180,6 +180,67 @@ public class WarmEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Plex_webhook_media_play_triggers_the_predictive_warm()
+    {
+        var response = await Client.PostAsync("/webhook/plex",
+            JsonBody("""
+                {
+                  "event": "media.play",
+                  "Metadata": {
+                    "type": "movie",
+                    "title": "Back to the Future",
+                    "year": 1985,
+                    "Guid": [ { "id": "tmdb://105", "provider": "tmdb" } ]
+                  }
+                }
+                """));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(3, doc.RootElement.GetProperty("itemsWarmed").GetInt32());
+
+        var store = _factory.Services.GetRequiredService<CacheStore>();
+        Assert.Equal(3, store.CountItemsByKind()["movie"]); // played + 2 similar
+        Assert.Contains(_upstream.Requests, r => r.Url.AbsolutePath.EndsWith("/movie/105/similar", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Plex_webhook_ignores_non_play_events_without_warming()
+    {
+        var response = await Client.PostAsync("/webhook/plex",
+            JsonBody("""{"event":"media.pause","Metadata":{"type":"movie","title":"Back to the Future"}}"""));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("ignored", doc.RootElement.GetProperty("result").GetString());
+
+        var store = _factory.Services.GetRequiredService<CacheStore>();
+        Assert.Empty(store.CountItemsByKind());
+        Assert.DoesNotContain(_upstream.Requests, r => r.Url.AbsolutePath.Contains("/similar", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Plex_webhook_ignores_non_media_metadata_types()
+    {
+        var response = await Client.PostAsync("/webhook/plex",
+            JsonBody("""{"event":"media.play","Metadata":{"type":"track","title":"A Song"}}"""));
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("ignored", doc.RootElement.GetProperty("result").GetString());
+        Assert.Empty(_factory.Services.GetRequiredService<CacheStore>().CountItemsByKind());
+    }
+
+    [Fact]
+    public async Task Plex_webhook_malformed_body_returns_400()
+    {
+        var response = await Client.PostAsync("/webhook/plex",
+            new StringContent("not json", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Warm_status_reports_the_last_run()
     {
         var before = JsonDocument.Parse(await Client.GetStringAsync("/warm/status"));

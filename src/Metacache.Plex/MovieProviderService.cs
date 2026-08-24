@@ -60,6 +60,25 @@ public sealed class MovieProviderService
             [MovieMapper.ToMatchItem(movie, ProviderIdentities.Movie, _options.ImageBaseUrl, hint.Language)]);
     }
 
+    /// <summary>
+    /// Resolves a pinned override target (a tmdb-source rating key, §15.10) into a single
+    /// match-shaped container, or null when the key is not a tmdb movie key.
+    /// </summary>
+    public async Task<MetadataContainer?> MatchOverrideAsync(
+        string ratingKey, string? language, CancellationToken cancellationToken)
+    {
+        if (!RatingKey.TryParse(ratingKey, out ParsedRatingKey parsed)
+            || parsed.Source != "tmdb" || parsed.Kind != "movie")
+            return null;
+        if (!int.TryParse(parsed.Id, NumberStyles.None, CultureInfo.InvariantCulture, out int id))
+            return null;
+
+        TmdbMovie movie = await _tmdb.GetMovieAsync(id, language, cancellationToken);
+        RegisterImages(movie);
+        return new MetadataContainer(0, 1, ProviderIdentities.Movie, 1,
+            [MovieMapper.ToMatchItem(movie, ProviderIdentities.Movie, _options.ImageBaseUrl, language)]);
+    }
+
     /// <summary>Full metadata for a movie rating key; null when the id is malformed or the movie is unknown.</summary>
     public async Task<MetadataContainer?> GetMovieMetadataAsync(
         string tmdbId, string? language, string? country, CancellationToken cancellationToken)

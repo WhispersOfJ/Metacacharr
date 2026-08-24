@@ -10,7 +10,7 @@ namespace Metacache.Plex;
 /// All property names are pinned with explicit attributes, so the naming policy is
 /// irrelevant — only the conflict comparison changes.
 /// </summary>
-internal static class ProviderJson
+public static class ProviderJson
 {
     public static readonly JsonSerializerOptions Options =
         new(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = false };

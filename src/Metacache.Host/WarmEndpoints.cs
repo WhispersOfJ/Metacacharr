@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Metacache.Core.Providers;
 using Metacache.Plex.Warming;
 
 namespace Metacache.Host;
@@ -31,6 +32,32 @@ public static class WarmEndpoints
             HandleArrWebhookAsync(warmer, context, ct, "movie", "tmdbId"));
         app.MapPost("/webhook/sonarr", (CacheWarmer warmer, HttpContext context, CancellationToken ct) =>
             HandleArrWebhookAsync(warmer, context, ct, "series", "tvdbId"));
+        // Predictive warm (§20): Plex posts the playback-start event here; the warmer
+        // resolves the played item and pre-fetches it, the next episodes, and similar
+        // titles so the next play is a cache hit.
+        app.MapPost("/webhook/plex", (CacheWarmer warmer, HttpContext context, CancellationToken ct) =>
+            HandlePlexWebhookAsync(warmer, context, ct));
+    }
+
+    /// <summary>Parses a Plex webhook and runs the predictive warm on media.play.</summary>
+    private static async Task<IResult> HandlePlexWebhookAsync(CacheWarmer warmer, HttpContext context, CancellationToken ct)
+    {
+        string body = await new StreamReader(context.Request.Body).ReadToEndAsync(ct).ConfigureAwait(false);
+        PlexWebhookPayload? payload = PlexPlayParser.Parse(body);
+        if (payload is null)
+            return Results.Json(new { error = "Request body is not valid JSON." }, JsonOptions, statusCode: StatusCodes.Status400BadRequest);
+
+        // Only playback start triggers a warm; every other event (pause, stop, scrobble,
+        // the settings test button) is acknowledged without touching the cache.
+        if (!string.Equals(payload.Event, "media.play", StringComparison.OrdinalIgnoreCase))
+            return Results.Json(new { result = "ignored" }, JsonOptions);
+        if (payload.Metadata is not { } play)
+            return Results.Json(new { result = "ignored" }, JsonOptions);
+
+        WarmResult? result = await warmer.WarmPredictiveAsync(play, ct).ConfigureAwait(false);
+        return result is null
+            ? Results.Json(new { error = "A warm is already running." }, JsonOptions, statusCode: StatusCodes.Status409Conflict)
+            : Results.Json(result, JsonOptions);
     }
 
     /// <summary>Warms the single item named by an ARR webhook payload (eventType Test → ok).</summary>

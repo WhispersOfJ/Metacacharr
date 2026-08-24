@@ -18,6 +18,11 @@ updates:
       timezone: "Etc/UTC"
     open-pull-requests-limit: 10
     labels: ["dependencies", "dotnet"]
+    ignore:
+      # ImageSharp 4.x requires a paid license key at build time; stay on the 3.1.x
+      # line (Six Labors Split License, free for open source) until that changes.
+      - dependency-name: "SixLabors.ImageSharp"
+        update-types: ["version-update:semver-major"]
     groups:
       # The whole test toolchain in one PR (it is the only direct NuGet surface).
       test-toolchain:

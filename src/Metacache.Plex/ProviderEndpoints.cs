@@ -22,8 +22,8 @@ public static class ProviderEndpoints
     {
         app.MapGet("/", () => Results.Text(
             "Metacache metadata provider. Definitions: GET /movie, GET /tv. Match: POST /library/metadata/matches. "
-            + "Metadata: GET /library/metadata/{ratingKey}. Dashboard: GET /dashboard. "
-            + "Metrics: GET /metrics, GET /metrics/prometheus. "
+            + "Metadata: GET /library/metadata/{ratingKey}. Browse: GET /library/search, GET /library/recentlyAdded. "
+            + "Dashboard: GET /dashboard. Metrics: GET /metrics, GET /metrics/prometheus. "
             + "Health: GET /healthz.",
             "text/plain"));
 
@@ -37,7 +37,8 @@ public static class ProviderEndpoints
         app.MapGet("/library/metadata/{ratingKey}/images", HandleImages);
     }
 
-    private static async Task<IResult> HandleMatch(HttpContext context, MovieProviderService movies, TvProviderService tv)
+    private static async Task<IResult> HandleMatch(
+        HttpContext context, MovieProviderService movies, TvProviderService tv, CacheStore store)
     {
         string body = await new StreamReader(context.Request.Body).ReadToEndAsync(context.RequestAborted);
         if (!MatchRequestParser.TryParse(body, out MatchHint hint, out bool includeChildren, out string? error))
@@ -46,16 +47,67 @@ public static class ProviderEndpoints
         hint = hint with { Language = PlexRequest.GetLanguage(context.Request) };
         try
         {
-            MetadataContainer container = hint.Kind == MatchKind.Movie
-                ? await movies.MatchAsync(hint, context.RequestAborted)
-                : await tv.MatchAsync(hint, includeChildren, context.RequestAborted);
+            // §15.10: a manual pin wins over upstream search. Consult before any search;
+            // an unresolvable pin (target deleted upstream) falls back to normal matching.
+            MatchOverride? pinned = store.GetOverride(MatchOverrideKeys.ForHint(hint));
+            MetadataContainer? pinnedContainer = null;
+            if (pinned is not null)
+            {
+                try
+                {
+                    pinnedContainer = hint.Kind == MatchKind.Movie
+                        ? await movies.MatchOverrideAsync(pinned.Target, hint.Language, context.RequestAborted)
+                        : await tv.MatchOverrideAsync(pinned.Target, includeChildren, hint.Language, context.RequestAborted);
+                }
+                catch (TmdbNotFoundException)
+                {
+                    pinnedContainer = null;
+                }
+            }
+
+            MetadataContainer container;
+            if (hint.Manual)
+            {
+                // Fix Match: the normal ranked list, with the pinned result first when one exists.
+                container = hint.Kind == MatchKind.Movie
+                    ? await movies.MatchAsync(hint, context.RequestAborted)
+                    : await tv.MatchAsync(hint, includeChildren, context.RequestAborted);
+                if (pinnedContainer is { Metadata.Count: > 0 } pc)
+                {
+                    // Pinned result first, ranked candidates after (deduped — the pinned
+                    // target is often also in the ranked list).
+                    var pinnedKeys = pc.Metadata.Select(m => m.RatingKey).ToHashSet(StringComparer.Ordinal);
+                    var rest = container.Metadata.Where(m => !pinnedKeys.Contains(m.RatingKey)).ToList();
+                    container = container with
+                    {
+                        Size = pc.Metadata.Count + rest.Count,
+                        TotalSize = pc.Metadata.Count + rest.Count,
+                        Metadata = [.. pc.Metadata, .. rest]
+                    };
+                }
+            }
+            else
+            {
+                container = pinnedContainer
+                    ?? (hint.Kind == MatchKind.Movie
+                        ? await movies.MatchAsync(hint, context.RequestAborted)
+                        : await tv.MatchAsync(hint, includeChildren, context.RequestAborted));
+
+                // A zero-result auto match is a genuine failure — record it for admin
+                // review and pinning. Pinned hints (even broken ones) are admin-owned,
+                // so never record them.
+                if (pinned is null && container.Metadata.Count == 0)
+                    store.RecordUnmatched(hint);
+            }
+
             return Results.Json(new MetadataContainerResponse(container), ProviderJson.Options);
         }
         catch (TmdbNotFoundException)
         {
             // A guid pointed at something that no longer exists upstream → no match.
+            string id = hint.Kind == MatchKind.Movie ? ProviderIdentities.Movie : ProviderIdentities.Tv;
             return Results.Json(new MetadataContainerResponse(
-                new MetadataContainer(0, 0, ProviderIdentities.Movie, 0, [])), statusCode: StatusCodes.Status200OK);
+                new MetadataContainer(0, 0, id, 0, [])), statusCode: StatusCodes.Status200OK);
         }
         catch (UpstreamException ex)
         {

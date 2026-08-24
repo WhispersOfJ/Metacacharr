@@ -13,6 +13,7 @@ public static class ProviderServiceCollectionExtensions
     {
         services.AddSingleton<MovieProviderService>();
         services.AddSingleton<TvProviderService>();
+        services.AddSingleton<GuidLookupService>();
         return services;
     }
 }

@@ -41,6 +41,68 @@ public sealed class TvProviderService
 
     // ---- match ----
 
+    /// <summary>
+    /// Resolves a pinned override target (a tmdb-source rating key, §15.10) into a single
+    /// match-shaped container, or null when the key is not a tmdb-sourced show/season/
+    /// episode key or the target no longer resolves upstream.
+    /// </summary>
+    public async Task<MetadataContainer?> MatchOverrideAsync(
+        string ratingKey, bool includeChildren, string? language, CancellationToken cancellationToken)
+    {
+        if (!RatingKey.TryParse(ratingKey, out ParsedRatingKey parsed) || parsed.Source != "tmdb")
+            return null;
+        if (!int.TryParse(parsed.Id, NumberStyles.None, CultureInfo.InvariantCulture, out int id))
+            return null;
+
+        switch (parsed.Kind)
+        {
+            case "show":
+                {
+                    TmdbShow show = await _tmdb.GetShowAsync(id, language, cancellationToken);
+                    RegisterShowImages(show);
+                    MetadataItem item = TvMapper.ToMatchShow(show, ProviderIdentities.Tv, _options.ImageBaseUrl, language);
+                    if (includeChildren)
+                        item = item with { Children = SeasonChildren(show) };
+                    return new MetadataContainer(0, 1, ProviderIdentities.Tv, 1, [item]);
+                }
+            case "season" when parsed.Indices.Length == 1:
+                {
+                    TmdbShow show = await _tmdb.GetShowAsync(id, language, cancellationToken);
+                    RegisterShowImages(show);
+                    TmdbSeasonSummary? summary = (show.Seasons ?? []).FirstOrDefault(s => s.SeasonNumber == parsed.Indices[0]);
+                    if (summary is null)
+                        return null;
+                    MetadataItem item = TvMapper.ToSeasonItem(show, summary, ProviderIdentities.Tv, _options.ImageBaseUrl);
+                    if (includeChildren)
+                    {
+                        TmdbSeason season = await _tmdb.GetSeasonAsync(show.Id, parsed.Indices[0], language, cancellationToken);
+                        item = item with { Children = EpisodeChildren(season, show) };
+                    }
+                    return new MetadataContainer(0, 1, ProviderIdentities.Tv, 1, [item]);
+                }
+            case "episode" when parsed.Indices.Length == 2:
+                {
+                    TmdbShow show = await _tmdb.GetShowAsync(id, language, cancellationToken);
+                    RegisterShowImages(show);
+                    var hint = MatchHint.Empty with
+                    {
+                        Kind = MatchKind.Episode,
+                        Language = language,
+                        ParentIndex = parsed.Indices[0]
+                    };
+                    IReadOnlyList<TmdbEpisode> episodes = await GetEpisodesAsync(show, hint, cancellationToken);
+                    TmdbEpisode? episode = episodes.FirstOrDefault(e =>
+                        e.SeasonNumber == parsed.Indices[0] && e.EpisodeNumber == parsed.Indices[1]);
+                    if (episode is null)
+                        return null;
+                    return new MetadataContainer(0, 1, ProviderIdentities.Tv, 1,
+                        [TvMapper.ToEpisodeItem(episode, show, ProviderIdentities.Tv, _options.ImageBaseUrl)]);
+                }
+            default:
+                return null;
+        }
+    }
+
     public async Task<MetadataContainer> MatchAsync(MatchHint hint, bool includeChildren, CancellationToken cancellationToken) =>
         hint.Kind switch
         {

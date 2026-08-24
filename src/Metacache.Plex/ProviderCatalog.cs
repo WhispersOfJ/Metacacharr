@@ -11,10 +11,14 @@ namespace Metacache.Plex;
 public static class ProviderCatalog
 {
     // Declared before Movie/Tv: static initializers run in declaration order.
+    // search + recentlyAdded (DESIGN.md §21) let libraries browse entirely from the
+    // local index; both answer Plex-shaped containers from the warmed cache.
     private static readonly IReadOnlyList<ProviderFeature> Features =
     [
         new("metadata", "/library/metadata"),
-        new("match", "/library/metadata/matches")
+        new("match", "/library/metadata/matches"),
+        new("search", "/library/search"),
+        new("recentlyAdded", "/library/recentlyAdded")
     ];
 
     public static MediaProviderResponse Movie { get; } = new(new MediaProviderDefinition(

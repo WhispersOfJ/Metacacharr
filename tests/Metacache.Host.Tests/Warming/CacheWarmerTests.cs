@@ -57,6 +57,7 @@ public class CacheWarmerTests : IDisposable
         Assert.Equal(4, result.ImagesWarmed); // poster + backdrop per movie
         Assert.Equal(0, result.Missing);
         Assert.Equal(0, result.Errors);
+        Assert.StartsWith("/img/", Store.GetItem("movie-105", "en-US")!.Thumb); // browse thumb (§21)
 
         Assert.Equal(2, Store.CountItemsByKind()["movie"]);
         Assert.True(Store.GetStats().UpstreamEntries >= 2, "movie details should be cached");
@@ -132,5 +133,81 @@ public class CacheWarmerTests : IDisposable
         WarmResult? retry = await warmer.WarmMovieAsync(105);
         Assert.NotNull(retry);
         Assert.Equal(1, retry!.ItemsWarmed);
+    }
+
+    // ---- predictive warm (§20) ----
+
+    [Fact]
+    public async Task Predictive_movie_warm_warms_played_and_similar_titles()
+    {
+        _upstream.Route();
+        var play = new PlexPlayMetadata(
+            Kind: "movie", Title: null, Year: null, Guids: ["tmdb://105"], ShowTitle: null, Season: null, Episode: null);
+
+        WarmResult result = (await Warmer.WarmPredictiveAsync(play))!;
+
+        Assert.Equal("predictive", result.Source);
+        Assert.Equal(3, result.ItemsWarmed); // played 105 + similar 165 + 999
+        Assert.Equal(5, result.ImagesWarmed); // poster + backdrop each (999 has no backdrop)
+        Assert.Equal(0, result.Missing);
+        Assert.Equal(0, result.Errors);
+        Assert.Equal(3, Store.CountItemsByKind()["movie"]);
+        Assert.Contains(_upstream.Requests, r => r.Url.AbsolutePath.EndsWith("/movie/105/similar", StringComparison.Ordinal));
+
+        WarmResult status = Assert.IsType<WarmResult>(Warmer.Status.LastResult);
+        Assert.Equal("predictive", status.Source);
+    }
+
+    [Fact]
+    public async Task Predictive_episode_warm_warms_show_next_episodes_and_similar_show()
+    {
+        _upstream.Route();
+        var play = new PlexPlayMetadata(
+            Kind: "episode", Title: null, Year: null, Guids: [],
+            ShowTitle: "Adventure Time", Season: 1, Episode: 1);
+
+        WarmResult result = (await Warmer.WarmPredictiveAsync(play))!;
+
+        // Show card + season 1 + played & next episode (1,1)/(1,2) + similar show 1399 card.
+        Assert.Equal(5, result.ItemsWarmed);
+        Assert.Equal(0, result.Missing);
+        Assert.Equal(0, result.Errors);
+        Assert.Equal(2, Store.CountItemsByKind()["show"]); // 15260 + similar 1399
+        Assert.Equal(1, Store.CountItemsByKind()["season"]);
+        Assert.Contains(_upstream.Requests, r => r.Url.AbsolutePath.EndsWith("/tv/15260/season/1/episode/1", StringComparison.Ordinal));
+        Assert.Contains(_upstream.Requests, r => r.Url.AbsolutePath.EndsWith("/tv/15260/season/1/episode/2", StringComparison.Ordinal));
+        Assert.Contains(_upstream.Requests, r => r.Url.AbsolutePath.EndsWith("/tv/15260/similar", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Predictive_finale_play_primes_the_next_season()
+    {
+        _upstream.Route();
+        // Season 1's last episode (1,2) → also warm season 2 + its first episode.
+        var play = new PlexPlayMetadata(
+            Kind: "episode", Title: null, Year: null, Guids: [],
+            ShowTitle: "Adventure Time", Season: 1, Episode: 2);
+
+        WarmResult result = (await Warmer.WarmPredictiveAsync(play))!;
+
+        // Show + season 1 + episode (1,2) + season 2 + episode (2,1) + similar show = 6.
+        Assert.Equal(6, result.ItemsWarmed);
+        Assert.Equal(2, Store.CountItemsByKind()["season"]);
+        Assert.Contains(_upstream.Requests, r => r.Url.AbsolutePath.EndsWith("/tv/15260/season/2", StringComparison.Ordinal));
+        Assert.Contains(_upstream.Requests, r => r.Url.AbsolutePath.EndsWith("/tv/15260/season/2/episode/1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Predictive_unresolvable_item_reports_missing_without_warming()
+    {
+        _upstream.Route();
+        var play = new PlexPlayMetadata(
+            Kind: "movie", Title: "Explicit", Year: null, Guids: [], ShowTitle: null, Season: null, Episode: null);
+
+        WarmResult result = (await Warmer.WarmPredictiveAsync(play))!;
+
+        Assert.Equal(1, result.Missing);
+        Assert.Equal(0, result.ItemsWarmed);
+        Assert.Empty(Store.CountItemsByKind());
     }
 }

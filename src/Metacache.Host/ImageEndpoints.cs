@@ -1,3 +1,4 @@
+using System.Globalization;
 using Metacache.Core.Cache;
 
 namespace Metacache.Host;
@@ -7,6 +8,10 @@ namespace Metacache.Host;
 /// original upstream URL (produced by <see cref="ImageCache.RewriteToLocalPath"/>); a
 /// stored entry is streamed from disk, and a known-but-missing file is refetched from
 /// upstream so the endpoint is self-healing. Unknown hashes 404.
+///
+/// Sized variants (DESIGN.md §21): `?width={size}` (from <see cref="ImageSizes.Allowed"/>, a
+/// longest-side bound) serves a locally-resized JPEG variant, cached on disk — browse
+/// lists ask for small thumbs and get them entirely from the local cache.
 /// </summary>
 public static class ImageEndpoints
 {
@@ -17,10 +22,22 @@ public static class ImageEndpoints
             if (!ImageStore.IsValidHash(hash))
                 return Results.NotFound();
 
+            int? width = null;
+            string? rawWidth = context.Request.Query["width"];
+            if (!string.IsNullOrEmpty(rawWidth))
+            {
+                if (!int.TryParse(rawWidth, NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
+                    || !ImageSizes.IsAllowed(parsed))
+                    return Results.BadRequest(new { error = $"'width' must be one of {string.Join(", ", ImageSizes.Allowed)}." });
+                width = parsed;
+            }
+
             ImageResult? result;
             try
             {
-                result = await images.GetByHashAsync(hash, context.RequestAborted);
+                result = width is { } w
+                    ? await images.GetVariantAsync(hash, w, context.RequestAborted)
+                    : await images.GetByHashAsync(hash, context.RequestAborted);
             }
             catch (UpstreamException)
             {

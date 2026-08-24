@@ -1,7 +1,9 @@
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Metacache.Core.Cache;
+using Metacache.Core.Matching;
 using Metacache.Core.Providers;
+using Metacache.Plex.Models;
 
 namespace Metacache.Plex.Warming;
 
@@ -16,9 +18,19 @@ namespace Metacache.Plex.Warming;
 /// </summary>
 public sealed class CacheWarmer
 {
+    /// <summary>How many "next" episodes are warmed after the played one (the autoplay queue).</summary>
+    private const int NextEpisodesToWarm = 4;
+
+    /// <summary>How many similar titles are warmed per play event (the "related" set).</summary>
+    private const int SimilarDepth = 3;
+
+    /// <summary>How many episodes of the *next* season are primed when the played one is a season finale.</summary>
+    private const int NextSeasonPriming = 2;
+
     private readonly TmdbClient _tmdb;
     private readonly MovieProviderService _movies;
     private readonly TvProviderService _tv;
+    private readonly GuidLookupService _lookup;
     private readonly ImageCache _images;
     private readonly MetadataCache _items;
     private readonly UpstreamCache _upstream;
@@ -32,6 +44,7 @@ public sealed class CacheWarmer
         TmdbClient tmdb,
         MovieProviderService movies,
         TvProviderService tv,
+        GuidLookupService lookup,
         ImageCache images,
         MetadataCache items,
         UpstreamCache upstream,
@@ -41,6 +54,7 @@ public sealed class CacheWarmer
         _tmdb = tmdb;
         _movies = movies;
         _tv = tv;
+        _lookup = lookup;
         _images = images;
         _items = items;
         _upstream = upstream;
@@ -98,6 +112,202 @@ public sealed class CacheWarmer
                 ? new WarmResult("show", items, images, Missing: 0, Errors: 0, Skipped: false, ElapsedSeconds: 0)
                 : new WarmResult("show", ItemsWarmed: 0, ImagesWarmed: 0, Missing: 1, Errors: 0, Skipped: false, ElapsedSeconds: 0);
         }, cancellationToken);
+
+    // ---- predictive warm (the /webhook/plex playback-start path, §20) ----
+
+    /// <summary>
+    /// Predictive warm on a playback-start event: resolves the played item (guid first,
+    /// then title matching), warms it, the next episodes (TV) and up to
+    /// <see cref="SimilarDepth"/> similar titles. Returns null when another warm is
+    /// running — the webhook answers 409 then, same as the ARR webhooks.
+    /// </summary>
+    public Task<WarmResult?> WarmPredictiveAsync(PlexPlayMetadata play, CancellationToken cancellationToken = default) =>
+        RunAsync("predictive", ct => WarmPredictiveInnerAsync(play, ct), cancellationToken);
+
+    private async Task<WarmResult> WarmPredictiveInnerAsync(PlexPlayMetadata play, CancellationToken ct)
+    {
+        if (play.Kind == "movie")
+            return await WarmPlayedMovieAsync(play, ct).ConfigureAwait(false);
+        return await WarmPlayedEpisodeAsync(play, ct).ConfigureAwait(false);
+    }
+
+    private async Task<WarmResult> WarmPlayedMovieAsync(PlexPlayMetadata play, CancellationToken ct)
+    {
+        int? tmdbId = await ResolveMovieIdAsync(play, ct).ConfigureAwait(false);
+        if (tmdbId is null)
+            return new WarmResult("predictive", ItemsWarmed: 0, ImagesWarmed: 0, Missing: 1, Errors: 0, Skipped: false, ElapsedSeconds: 0);
+
+        int images = await WarmOneMovieAsync(tmdbId.Value, ct).ConfigureAwait(false);
+        (int similarItems, int similarImages) = await WarmSimilarAsync(tmdbId.Value, isMovie: true, ct).ConfigureAwait(false);
+        _logger.LogInformation("Predictive warm (movie): played tmdb {Id} + {Count} similar", tmdbId, similarItems);
+        return new WarmResult("predictive", 1 + similarItems, images + similarImages, Missing: 0, Errors: 0, Skipped: false, ElapsedSeconds: 0);
+    }
+
+    private async Task<WarmResult> WarmPlayedEpisodeAsync(PlexPlayMetadata play, CancellationToken ct)
+    {
+        int? showId = await ResolveShowIdAsync(play, ct).ConfigureAwait(false);
+        if (showId is null)
+            return new WarmResult("predictive", ItemsWarmed: 0, ImagesWarmed: 0, Missing: 1, Errors: 0, Skipped: false, ElapsedSeconds: 0);
+
+        (int items, int images) = await WarmShowAroundAsync(showId.Value, play.Season, play.Episode, ct).ConfigureAwait(false);
+        (int similarItems, int similarImages) = await WarmSimilarAsync(showId.Value, isMovie: false, ct).ConfigureAwait(false);
+        _logger.LogInformation("Predictive warm (episode): show tmdb {Id} s{Season}e{Episode} = {Items} items + {Count} similar",
+            showId, play.Season, play.Episode, items, similarItems);
+        return new WarmResult("predictive", items + similarItems, images + similarImages, Missing: 0, Errors: 0, Skipped: false, ElapsedSeconds: 0);
+    }
+
+    /// <summary>Resolves the played movie to a tmdb id: provider guid first, then title+year auto-match.</summary>
+    private async Task<int?> ResolveMovieIdAsync(PlexPlayMetadata play, CancellationToken ct)
+    {
+        try
+        {
+            foreach (string guid in play.Guids)
+            {
+                GuidLookupResult? result = await _lookup.LookupAsync(guid, ct).ConfigureAwait(false);
+                if (result?.Kind == "movie" && result.TmdbId is { } id)
+                    return id;
+            }
+            if (play.Title is not null)
+            {
+                MetadataContainer container = await _movies.MatchAsync(
+                    MatchHint.Empty with { Kind = MatchKind.Movie, Title = play.Title, Year = play.Year }, ct).ConfigureAwait(false);
+                if (TmdbIdOf(container) is { } id)
+                    return id;
+            }
+        }
+        catch (TmdbNotFoundException)
+        {
+        }
+        return null;
+    }
+
+    /// <summary>Resolves the played episode's SHOW to a tmdb id: show-level guid first, then show-title match.</summary>
+    private async Task<int?> ResolveShowIdAsync(PlexPlayMetadata play, CancellationToken ct)
+    {
+        try
+        {
+            foreach (string guid in play.Guids)
+            {
+                GuidLookupResult? result = await _lookup.LookupAsync(guid, ct).ConfigureAwait(false);
+                if (result?.Kind == "show" && result.TmdbId is { } id)
+                    return id;
+            }
+            if (play.ShowTitle is not null)
+            {
+                MetadataContainer container = await _tv.MatchAsync(
+                    MatchHint.Empty with { Kind = MatchKind.Show, Title = play.ShowTitle, Year = play.Year }, includeChildren: false, ct).ConfigureAwait(false);
+                if (TmdbIdOf(container) is { } id)
+                    return id;
+            }
+        }
+        catch (TmdbNotFoundException)
+        {
+        }
+        return null;
+    }
+
+    private static int? TmdbIdOf(MetadataContainer container)
+    {
+        if (container.Metadata.Count == 0)
+            return null;
+        if (!RatingKey.TryParse(container.Metadata[0].RatingKey, out ParsedRatingKey parsed) || parsed.Source != "tmdb")
+            return null;
+        return int.TryParse(parsed.Id, NumberStyles.None, CultureInfo.InvariantCulture, out int id) ? id : null;
+    }
+
+    /// <summary>
+    /// Warms the played show's card, its season and the played episode + next episodes
+    /// (the autoplay queue); a season-finale play primes the next season's first episodes.
+    /// </summary>
+    private async Task<(int Items, int Images)> WarmShowAroundAsync(int showId, int? season, int? episode, CancellationToken ct)
+    {
+        int items = 0, images = 0;
+        TmdbShow show = await _tmdb.GetShowAsync(showId, null, ct).ConfigureAwait(false);
+        images += await WarmImageAsync(show.PosterPath, ct).ConfigureAwait(false)
+            + await WarmImageAsync(show.BackdropPath, ct).ConfigureAwait(false);
+        RecordItem("show", showId, "show", title: show.Name, year: YearOf(show.FirstAirDate), thumb: show.PosterPath);
+        items++;
+
+        int playedSeason = Math.Max(1, season ?? 1);
+        int playedEpisode = Math.Max(1, episode ?? 1);
+
+        TmdbSeason seasonData = await _tmdb.GetSeasonAsync(showId, playedSeason, null, ct).ConfigureAwait(false);
+        images += await WarmImageAsync(seasonData.PosterPath, ct).ConfigureAwait(false);
+        RecordItem("season", seasonData.Id, "season", showId, title: show.Name, year: YearOf(show.FirstAirDate), thumb: seasonData.PosterPath);
+        items++;
+
+        int warmed = 0;
+        foreach (TmdbEpisode e in seasonData.Episodes ?? [])
+        {
+            if (e.EpisodeNumber < playedEpisode || warmed >= NextEpisodesToWarm)
+                continue;
+            await WarmOneEpisodeAsync(showId, e.SeasonNumber, e.EpisodeNumber, show.Name, e.StillPath, ct).ConfigureAwait(false);
+            items++;
+            warmed++;
+        }
+
+        // Season finale → prime the next season's opening, so the queue continues
+        // across the boundary without paying upstream on the next autoplay.
+        int lastInSeason = (seasonData.Episodes ?? []).Select(e => e.EpisodeNumber).DefaultIfEmpty(0).Max();
+        int maxSeason = (show.Seasons ?? []).Select(s => s.SeasonNumber).DefaultIfEmpty(playedSeason).Max();
+        if (playedEpisode >= lastInSeason && playedSeason < maxSeason)
+        {
+            TmdbSeason next = await _tmdb.GetSeasonAsync(showId, playedSeason + 1, null, ct).ConfigureAwait(false);
+            images += await WarmImageAsync(next.PosterPath, ct).ConfigureAwait(false);
+            RecordItem("season", next.Id, "season", showId, title: show.Name, year: YearOf(show.FirstAirDate), thumb: next.PosterPath);
+            items++;
+            int primed = 0;
+            foreach (TmdbEpisode e in next.Episodes ?? [])
+            {
+                if (primed >= NextSeasonPriming)
+                    break;
+                await WarmOneEpisodeAsync(showId, e.SeasonNumber, e.EpisodeNumber, show.Name, e.StillPath, ct).ConfigureAwait(false);
+                items++;
+                primed++;
+            }
+        }
+        return (items, images);
+    }
+
+    /// <summary>Warms one episode the dedicated endpoint Plex uses (plus its still and index row).</summary>
+    private async Task WarmOneEpisodeAsync(int showId, int seasonNumber, int episodeNumber, string? showName, string? stillPath, CancellationToken ct)
+    {
+        TmdbEpisode episode = await _tmdb.GetEpisodeAsync(showId, seasonNumber, episodeNumber, null, ct).ConfigureAwait(false);
+        await WarmImageAsync(episode.StillPath, ct).ConfigureAwait(false);
+        RecordItem("episode", episode.Id, "episode", showId, title: showName, year: YearOf(episode.AirDate), thumb: stillPath);
+    }
+
+    /// <summary>
+    /// Warms the top <see cref="SimilarDepth"/> similar titles. Movies warm fully
+    /// (details + artwork); shows warm as cards (metadata + artwork, no season crawl)
+    /// so a play event stays bounded.
+    /// </summary>
+    private async Task<(int Items, int Images)> WarmSimilarAsync(int tmdbId, bool isMovie, CancellationToken ct)
+    {
+        int items = 0, images = 0;
+        if (isMovie)
+        {
+            IReadOnlyList<TmdbMovieSummary> similar = await _tmdb.GetSimilarMoviesAsync(tmdbId, null, ct).ConfigureAwait(false);
+            foreach (TmdbMovieSummary s in similar.Take(SimilarDepth))
+            {
+                images += await WarmOneMovieAsync(s.Id, ct).ConfigureAwait(false);
+                items++;
+            }
+        }
+        else
+        {
+            IReadOnlyList<TmdbShowSummary> similar = await _tmdb.GetSimilarShowsAsync(tmdbId, null, ct).ConfigureAwait(false);
+            foreach (TmdbShowSummary s in similar.Take(SimilarDepth))
+            {
+                TmdbShow show = await _tmdb.GetShowAsync(s.Id, null, ct).ConfigureAwait(false);
+                images += await WarmImageAsync(show.PosterPath, ct).ConfigureAwait(false)
+                    + await WarmImageAsync(show.BackdropPath, ct).ConfigureAwait(false);
+                RecordItem("show", s.Id, "show", title: show.Name, year: YearOf(show.FirstAirDate), thumb: show.PosterPath);
+                items++;
+            }
+        }
+        return (items, images);
+    }
 
     // ---- internals ----
 
@@ -189,7 +399,7 @@ public sealed class CacheWarmer
         TmdbMovie movie = await _tmdb.GetMovieAsync(tmdbId, null, ct).ConfigureAwait(false);
         int images = await WarmImageAsync(movie.PosterPath, ct).ConfigureAwait(false)
             + await WarmImageAsync(movie.BackdropPath, ct).ConfigureAwait(false);
-        RecordItem("movie", tmdbId, "movie");
+        RecordItem("movie", tmdbId, "movie", title: movie.Title, year: YearOf(movie.ReleaseDate), thumb: movie.PosterPath);
         return images;
     }
 
@@ -209,14 +419,14 @@ public sealed class CacheWarmer
         TmdbShow show = await _tmdb.GetShowAsync(showId, null, ct).ConfigureAwait(false);
         int images = await WarmImageAsync(show.PosterPath, ct).ConfigureAwait(false)
             + await WarmImageAsync(show.BackdropPath, ct).ConfigureAwait(false);
-        RecordItem("show", showId, "show");
+        RecordItem("show", showId, "show", title: show.Name, year: YearOf(show.FirstAirDate), thumb: show.PosterPath);
         int items = 1;
 
         foreach (TmdbSeasonSummary seasonSummary in show.Seasons ?? [])
         {
             TmdbSeason season = await _tmdb.GetSeasonAsync(showId, seasonSummary.SeasonNumber, null, ct).ConfigureAwait(false);
             images += await WarmImageAsync(season.PosterPath, ct).ConfigureAwait(false);
-            RecordItem("season", season.Id, "season", showId);
+            RecordItem("season", season.Id, "season", showId, title: show.Name, year: YearOf(show.FirstAirDate), thumb: season.PosterPath);
             items++;
 
             foreach (TmdbEpisode episode in season.Episodes ?? [])
@@ -225,7 +435,8 @@ public sealed class CacheWarmer
                 // warm it too — otherwise the first refresh pays one call per episode.
                 await _tmdb.GetEpisodeAsync(showId, episode.SeasonNumber, episode.EpisodeNumber, null, ct).ConfigureAwait(false);
                 images += await WarmImageAsync(episode.StillPath, ct).ConfigureAwait(false);
-                RecordItem("episode", episode.Id, "episode", showId);
+                RecordItem("episode", episode.Id, "episode", showId,
+                    title: show.Name, year: YearOf(episode.AirDate), thumb: episode.StillPath);
                 items++;
             }
         }
@@ -288,12 +499,16 @@ public sealed class CacheWarmer
         return 1;
     }
 
-    private void RecordItem(string kind, int sourceId, string idKind, int? parentId = null)
+    private void RecordItem(string kind, int sourceId, string idKind, int? parentId = null,
+        string? title = null, int? year = null, string? thumb = null)
     {
         string id = parentId is null
             ? $"{idKind}-{sourceId.ToString(CultureInfo.InvariantCulture)}"
             : $"{idKind}-{parentId.Value.ToString(CultureInfo.InvariantCulture)}-{sourceId.ToString(CultureInfo.InvariantCulture)}";
         var now = DateTimeOffset.UtcNow;
+        // The browse list (§21) serves /img/{hash}?width=… thumbs from this column; the
+        // hash is the rewritten local path of the TMDB artwork path the warm already fetched.
+        string? thumbLocal = thumb is null ? null : ImageCache.RewriteToLocalPath(_tmdb.ImageUrl(thumb)!);
         _items.Put(new CachedItem(
             Id: id,
             Kind: kind,
@@ -303,6 +518,19 @@ public sealed class CacheWarmer
             Json: "{}",
             FetchedAt: now,
             ExpiresAt: now.AddDays(1),
-            ETag: null));
+            ETag: null,
+            Title: title,
+            Year: year,
+            Thumb: thumbLocal));
+    }
+
+    /// <summary>Extracts the year from a TMDB "YYYY-MM-DD" date string, or null.</summary>
+    private static int? YearOf(string? date)
+    {
+        if (date is null || date.Length < 4)
+            return null;
+        return int.TryParse(date.AsSpan(0, 4), NumberStyles.None, CultureInfo.InvariantCulture, out int year)
+            ? year
+            : null;
     }
 }
