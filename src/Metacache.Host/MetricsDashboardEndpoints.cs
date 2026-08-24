@@ -42,6 +42,8 @@ public static class MetricsDashboardEndpoints
   .bar-fill { height:100%; background:var(--accent); border-radius:5px; }
   .bar-row .num { width:34px; text-align:right; font-weight:650; }
   .empty { color:var(--muted); font-style:italic; }
+  .legend { float:right; font-weight:400; text-transform:none; letter-spacing:0; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 4px 0 10px; vertical-align:-1px; }
   @media (max-width:720px){ .two { grid-template-columns:1fr; } }
 </style>
 </head>
@@ -60,7 +62,7 @@ public static class MetricsDashboardEndpoints
 </div>
 <div class="two">
   <div class="card">
-    <div class="label">Hit rate history (last 120 polls)</div>
+    <div class="label">Hit rate — live vs Prometheus scrapes <span class="legend"><i style="background:#4f8cff"></i>live<i style="background:#ffb454"></i>scrapes</span></div>
     <canvas id="spark"></canvas>
   </div>
   <div class="card">
@@ -76,7 +78,8 @@ public static class MetricsDashboardEndpoints
 </div>
 <script>
 const MAX = 120;
-let history = [];
+let history = [];      // live hit rate per poll (this browser's session)
+let scrape = [];       // server-side record of /metrics/prometheus scrapes (overlay)
 const kindColors = { movie: "#4f8cff", show: "#a06bff", season: "#ffb454", episode: "#3fb97f" };
 
 function humanize(bytes) {
@@ -119,6 +122,18 @@ function draw() {
   const ctx = c.getContext("2d");
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
+  if (!history.length && !scrape.length) return;
+  // Prometheus scrape overlay first (thinner, amber) so the live line reads on top.
+  if (scrape.length > 1) {
+    ctx.strokeStyle = "rgba(255,180,84,0.75)"; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < scrape.length; i++) {
+      const x = (i / (scrape.length - 1)) * w;
+      const y = h - scrape[i].hitRate * h;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
   if (!history.length) return;
   ctx.strokeStyle = "#4f8cff"; ctx.lineWidth = 2;
   ctx.beginPath();
@@ -149,6 +164,7 @@ async function poll() {
     renderKinds(m);
     history.push(m.hitRate);
     if (history.length > MAX) history.shift();
+    scrape = m.scrapeHistory || []; // server-side record of Prometheus scrapes
     draw();
     set("updated", "updated " + new Date().toLocaleTimeString());
   } catch (e) {

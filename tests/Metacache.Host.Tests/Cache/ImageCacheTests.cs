@@ -19,7 +19,7 @@ public class ImageCacheTests : IDisposable
             ImageDir = Path.Combine(Path.GetTempPath(), $"metacache-img-{Guid.NewGuid():N}");
             Store = new CacheStore(":memory:", Clock);
             ImageStore = new ImageStore(ImageDir, maxFileBytes);
-            Cache = new ImageCache(Store, ImageStore, Upstream, new SingleFlight(), Clock,
+            Cache = new ImageCache(Store, ImageStore, Upstream, new SingleFlight(), Clock, new UpstreamMetrics(),
                 NullLogger<ImageCache>.Instance, maxTotalBytes);
         }
 

@@ -18,7 +18,7 @@ public class TmdbClientTests
         public Fixture(string apiKey = "test-api-key", TmdbAuthMode auth = TmdbAuthMode.Bearer)
         {
             Store = new CacheStore(":memory:", Clock);
-            var cache = new UpstreamCache(Store, Upstream, new SingleFlight(), Clock, NullLogger<UpstreamCache>.Instance);
+            var cache = new UpstreamCache(Store, Upstream, new SingleFlight(), Clock, new UpstreamMetrics(), NullLogger<UpstreamCache>.Instance);
             Client = new TmdbClient(
                 new TmdbOptions(ApiKey: apiKey, BaseUrl: TmdbTestData.BaseUrl, Auth: auth),
                 cache, NullLogger<TmdbClient>.Instance);

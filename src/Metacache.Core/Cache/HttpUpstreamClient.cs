@@ -37,13 +37,24 @@ public sealed class HttpUpstreamClient : IUpstreamHttp, IDisposable
         if (response.Headers.RetryAfter is { } retry)
             retryAfter = retry.Date ?? (retry.Delta is { } delta ? DateTimeOffset.UtcNow.Add(delta) : null);
 
+        // Pass the response headers through (case-insensitive lookup) so consumers can
+        // read provider-specific signals — e.g. TMDB's X-RateLimit-* for the gauge.
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var header in response.Headers)
+            if (header.Value.Any())
+                headers[header.Key] = string.Join(", ", header.Value);
+        foreach (var header in response.Content.Headers)
+            if (header.Value.Any())
+                headers[header.Key] = string.Join(", ", header.Value);
+
         return new UpstreamResponse(
             (int)response.StatusCode,
             body,
             response.Content.Headers.ContentType?.MediaType,
             response.Headers.ETag?.Tag,
             response.Content.Headers.LastModified,
-            retryAfter);
+            retryAfter,
+            headers);
     }
 
     public void Dispose() => _http.Dispose();

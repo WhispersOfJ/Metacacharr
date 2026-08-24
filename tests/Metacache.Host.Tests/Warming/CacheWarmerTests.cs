@@ -118,6 +118,14 @@ public class CacheWarmerTests : IDisposable
         await Assert.ThrowsAsync<TmdbNotFoundException>(() => warmer.WarmMovieAsync(999999999));
         Assert.False(warmer.Status.IsRunning);
 
+        // A crashed warm still publishes a failed last result, so the Prometheus
+        // warm_failed alert has a series to key off (regression: null hid it).
+        WarmResult? failed = warmer.Status.LastResult;
+        Assert.NotNull(failed);
+        Assert.Equal(1, failed!.Errors);
+        Assert.Equal("movie", failed.Source);
+        Assert.False(failed.Skipped);
+
         // The gate was released: a subsequent warm still runs.
         WarmResult? retry = await warmer.WarmMovieAsync(105);
         Assert.NotNull(retry);

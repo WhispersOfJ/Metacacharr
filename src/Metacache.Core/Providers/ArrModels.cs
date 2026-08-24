@@ -29,4 +29,9 @@ public sealed record WarmResult(
 }
 
 /// <summary>Live snapshot of the warmer (for GET /warm/status).</summary>
-public sealed record WarmStatus(bool IsRunning, WarmResult? LastResult);
+/// <summary>
+/// Live warmer state. <see cref="CompletedAt"/> is when the most recent warm
+/// attempt finished (success or failure) — the /metrics/prometheus staleness
+/// alert keys off it, so a failed warm still refreshes the timestamp.
+/// </summary>
+public sealed record WarmStatus(bool IsRunning, WarmResult? LastResult, DateTimeOffset? CompletedAt = null);

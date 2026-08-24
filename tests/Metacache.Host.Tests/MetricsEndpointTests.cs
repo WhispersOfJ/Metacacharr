@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using Metacache.Core.Cache;
+using Metacache.Host.Tests.Cache;
 
 namespace Metacache.Host.Tests;
 
@@ -36,6 +37,7 @@ public class MetricsEndpointTests : ProviderEndpointTestBase
         Assert.Contains("Metacache", html);
         Assert.Contains("hitRate", html);      // polls /metrics by name
         Assert.Contains("/metrics", html);     // and fetches it live
+        Assert.Contains("scrapeHistory", html); // overlays the Prometheus scrape record
         Assert.Contains("<script>", html);     // self-contained, no external assets
     }
 
@@ -86,6 +88,115 @@ public class MetricsEndpointTests : ProviderEndpointTestBase
 
         // :memory: store has no DB file — the metric is omitted, not NaN.
         Assert.DoesNotContain("metacache_db_bytes", body);
+    }
+
+    [Fact]
+    public async Task Prometheus_metrics_include_warm_run_status()
+    {
+        // Before any warm: running gauge present, no last-run series yet.
+        string initial = await Client.GetStringAsync("/metrics/prometheus");
+        Assert.Contains("metacache_warm_running 0", initial);
+        Assert.DoesNotContain("metacache_warm_last_items", initial);
+        Assert.DoesNotContain("metacache_warm_last_timestamp_seconds", initial);
+
+        // A webhook warm publishes the run: per-source gauges + completion time.
+        var warm = await Client.PostAsync("/webhook/radarr",
+            JsonBody("""{"eventType":"Download","movie":{"id":1,"tmdbId":105,"title":"Back to the Future"}}"""));
+        Assert.Equal(System.Net.HttpStatusCode.OK, warm.StatusCode);
+
+        string after = await Client.GetStringAsync("/metrics/prometheus");
+        Assert.Contains("metacache_warm_running 0", after);
+        Assert.Contains("metacache_warm_last_items{source=\"movie\"} 1", after);
+        Assert.Contains("metacache_warm_last_errors{source=\"movie\"} 0", after);
+        Assert.Contains("metacache_warm_last_success{source=\"movie\"} 1", after);
+        Assert.Contains("# TYPE metacache_warm_last_items gauge", after);
+
+        string? timestampLine = after.Split('\n').FirstOrDefault(l => l.StartsWith("metacache_warm_last_timestamp_seconds ", StringComparison.Ordinal));
+        Assert.NotNull(timestampLine);
+        long epoch = long.Parse(timestampLine!["metacache_warm_last_timestamp_seconds ".Length..]);
+        Assert.True(epoch > 0, "warm completion timestamp should be a real unix time");
+    }
+
+    [Fact]
+    public async Task Prometheus_metrics_include_upstream_duration_histograms_and_rate_limit()
+    {
+        // Serve the movie fetch path with TMDB rate-limit headers so the gauge lands.
+        Upstream.Handler = request =>
+        {
+            string path = request.Url.AbsolutePath;
+            string body = path.EndsWith("/movie/105/credits", StringComparison.Ordinal) ? TmdbTestData.MovieCreditsJson
+                : path.EndsWith("/movie/105/release_dates", StringComparison.Ordinal) ? TmdbTestData.ReleaseDatesJson
+                : path.Contains("/movie/105", StringComparison.Ordinal) ? TmdbTestData.Movie105Json
+                : throw new InvalidOperationException($"Unexpected upstream request: {request.Url}");
+            return new UpstreamResponse(200, TestBytes.Of(body), "application/json", null, null, null,
+                new Dictionary<string, string>
+                {
+                    ["X-RateLimit-Remaining"] = "39",
+                    ["X-RateLimit-Limit"] = "40"
+                });
+        };
+
+        await Client.GetAsync("/library/metadata/tmdb-movie-105"); // 3 upstream calls
+        string body2 = await Client.GetStringAsync("/metrics/prometheus");
+
+        // Histogram: count/sum per provider, +Inf bucket equals the total.
+        Assert.Contains("# TYPE metacache_upstream_request_duration_seconds histogram", body2);
+        string countLine = body2.Split('\n')
+            .First(l => l.StartsWith("metacache_upstream_request_duration_seconds_count{provider=\"tmdb\"}", StringComparison.Ordinal));
+        long count = long.Parse(countLine[(countLine.LastIndexOf(' ') + 1)..]);
+        Assert.True(count >= 3, $"expected >= 3 tmdb observations, got {count}");
+        string infLine = body2.Split('\n')
+            .First(l => l.Contains("le=\"+Inf\"}", StringComparison.Ordinal) && l.Contains("provider=\"tmdb\"", StringComparison.Ordinal));
+        Assert.Equal(count, long.Parse(infLine[(infLine.LastIndexOf(' ') + 1)..]));
+        Assert.Contains("metacache_upstream_request_duration_seconds_sum{provider=\"tmdb\"}", body2);
+
+        // Rate-limit gauges from the response headers.
+        Assert.Contains("# TYPE metacache_tmdb_rate_limit_remaining gauge", body2);
+        Assert.Contains("metacache_tmdb_rate_limit_remaining 39", body2);
+        Assert.Contains("metacache_tmdb_rate_limit_limit 40", body2);
+    }
+
+    [Fact]
+    public async Task Prometheus_metrics_count_rate_limited_responses()
+    {
+        Upstream.Handler = _ => new UpstreamResponse(429, TestBytes.Of("rate limited"), "text/plain", null, null, null);
+
+        // The metadata call fails with 429; the counter still registers per provider.
+        await Client.GetAsync("/library/metadata/tmdb-movie-105");
+
+        string body = await Client.GetStringAsync("/metrics/prometheus");
+        Assert.Contains("# TYPE metacache_upstream_rate_limited_total counter", body);
+        string counterLine = body.Split('\n')
+            .First(l => l.StartsWith("metacache_upstream_rate_limited_total", StringComparison.Ordinal));
+        Assert.Contains("provider=\"tmdb\"}", counterLine);
+        long count = long.Parse(counterLine[(counterLine.LastIndexOf(' ') + 1)..]);
+        Assert.True(count >= 1, $"expected >= 1 rate-limited response, got {count}");
+    }
+
+    [Fact]
+    public async Task Prometheus_scrapes_are_recorded_for_the_dashboard_overlay()
+    {
+        await Client.GetAsync("/library/metadata/tmdb-movie-105"); // 3 upstream misses
+        await Client.GetStringAsync("/metrics/prometheus");        // scrape 1: hit rate 0
+
+        await Client.GetAsync("/library/metadata/tmdb-movie-105"); // 3 cache hits
+        await Client.GetStringAsync("/metrics/prometheus");        // scrape 2: hit rate 0.5
+
+        using JsonDocument doc = JsonDocument.Parse(await Client.GetStringAsync("/metrics"));
+        JsonElement scrapes = doc.RootElement.GetProperty("scrapeHistory");
+        Assert.Equal(2, scrapes.GetArrayLength());
+
+        JsonElement first = scrapes[0];
+        Assert.Equal(0, first.GetProperty("hitRate").GetDouble());
+        Assert.Equal(0, first.GetProperty("hits").GetInt32());
+        Assert.Equal(3, first.GetProperty("requests").GetInt32());
+        Assert.True(first.GetProperty("unixSeconds").GetInt64() > 0);
+
+        JsonElement second = scrapes[1];
+        Assert.Equal(0.5, second.GetProperty("hitRate").GetDouble(), precision: 2);
+        Assert.Equal(3, second.GetProperty("hits").GetInt32());
+        Assert.Equal(6, second.GetProperty("requests").GetInt32());
+        Assert.True(second.GetProperty("unixSeconds").GetInt64() >= first.GetProperty("unixSeconds").GetInt64());
     }
 
     [Fact]

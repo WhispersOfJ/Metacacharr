@@ -20,6 +20,7 @@ public sealed class UpstreamCache
     private readonly IUpstreamHttp _upstream;
     private readonly SingleFlight _flight;
     private readonly IClock _clock;
+    private readonly UpstreamMetrics _metrics;
     private readonly ILogger<UpstreamCache> _logger;
     private long _requests;
     private long _hits;
@@ -29,12 +30,14 @@ public sealed class UpstreamCache
         IUpstreamHttp upstream,
         SingleFlight flight,
         IClock clock,
+        UpstreamMetrics metrics,
         ILogger<UpstreamCache> logger)
     {
         _store = store;
         _upstream = upstream;
         _flight = flight;
         _clock = clock;
+        _metrics = metrics;
         _logger = logger;
     }
 
@@ -81,7 +84,7 @@ public sealed class UpstreamCache
             try
             {
                 var request = new UpstreamRequest(new Uri(url), cached.ETag, cached.LastModified, headers);
-                var upstream = await _upstream.SendAsync(request, CancellationToken.None).ConfigureAwait(false);
+                UpstreamResponse upstream = await TimedSendAsync(request, url).ConfigureAwait(false);
                 return HandleUpstreamResponse(upstream, key, url, cached, policy, now);
             }
             catch (HttpRequestException ex)
@@ -95,7 +98,7 @@ public sealed class UpstreamCache
         // Cold miss.
         try
         {
-            var upstream = await _upstream.SendAsync(new UpstreamRequest(new Uri(url), Headers: headers), CancellationToken.None).ConfigureAwait(false);
+            UpstreamResponse upstream = await TimedSendAsync(new UpstreamRequest(new Uri(url), Headers: headers), url).ConfigureAwait(false);
             return HandleUpstreamResponse(upstream, key, url, cached: null, policy, now);
         }
         catch (HttpRequestException ex)
@@ -104,9 +107,37 @@ public sealed class UpstreamCache
         }
     }
 
+    /// <summary>
+    /// Sends one upstream request, recording its duration in the per-provider histogram
+    /// (provider derived from the URL host). Recorded even when the request fails, so a
+    /// failing provider is visible in the histogram too.
+    /// </summary>
+    private async Task<UpstreamResponse> TimedSendAsync(UpstreamRequest request, string url)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            return await _upstream.SendAsync(request, CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            sw.Stop();
+            _metrics.Observe(ProviderFor(url), sw.Elapsed.TotalSeconds);
+        }
+    }
+
+    private static string ProviderFor(string url) => new Uri(url).Host switch
+    {
+        "api.themoviedb.org" => "tmdb",
+        "image.tmdb.org" => "images",
+        var host => host
+    };
+
     private CachedResponse HandleUpstreamResponse(
         UpstreamResponse upstream, string key, string url, CachedUpstreamRow? cached, CachePolicy policy, DateTimeOffset now)
     {
+        ObserveRateLimitHeaders(upstream.Headers);
+
         // 304: content unchanged — refresh the TTL on the existing entry.
         if (upstream.StatusCode == 304 && cached is not null)
         {
@@ -133,7 +164,11 @@ public sealed class UpstreamCache
             return new CachedResponse(404, [], null, CacheSource.Upstream);
         }
 
-        // 429 / 5xx / other: stale fallback or error.
+        // 429 / 5xx / other: stale fallback or error. Count throttling explicitly —
+        // TMDB's current API omits X-RateLimit-* headers, so 429s are the reliable
+        // rate-limit signal for the /metrics/prometheus counter.
+        if (upstream.StatusCode == 429)
+            _metrics.ObserveRateLimited(ProviderFor(url));
         var error = new UpstreamException(
             upstream.StatusCode, upstream.RetryAfter,
             $"Upstream returned {upstream.StatusCode} for {url}");
@@ -158,4 +193,18 @@ public sealed class UpstreamCache
     /// <summary>Live hit/miss counters for /metrics (served-from-cache counts as a hit).</summary>
     public CacheCounters GetCounters() =>
         new(Interlocked.Read(ref _requests), Interlocked.Read(ref _hits));
+
+    /// <summary>Reads TMDB's X-RateLimit-* headers (case-insensitive) into the metrics gauge.</summary>
+    private void ObserveRateLimitHeaders(IReadOnlyDictionary<string, string>? headers)
+    {
+        if (headers is null)
+            return;
+        int? remaining = TryParseHeader(headers, "X-RateLimit-Remaining");
+        int? limit = TryParseHeader(headers, "X-RateLimit-Limit");
+        if (remaining is not null || limit is not null)
+            _metrics.ObserveRateLimit(remaining, limit);
+    }
+
+    private static int? TryParseHeader(IReadOnlyDictionary<string, string> headers, string name) =>
+        headers.TryGetValue(name, out string? value) && int.TryParse(value, out int parsed) ? parsed : null;
 }

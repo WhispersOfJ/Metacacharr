@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Metacache.Core.Cache;
+using Metacache.Core.Providers;
+using Metacache.Plex.Warming;
 
 namespace Metacache.Host;
 
@@ -18,7 +20,7 @@ public static class MetricsEndpoints
 
     public static void MapMetricsEndpoints(this WebApplication app)
     {
-        app.MapGet("/metrics", (UpstreamCache cache, CacheStore store, ImageStore images, CacheOptions options) =>
+        app.MapGet("/metrics", (UpstreamCache cache, CacheStore store, ImageStore images, CacheOptions options, ScrapeHistory scrapes) =>
         {
             CacheCounters counters = cache.GetCounters();
             CacheStats stats = store.GetStats();
@@ -36,19 +38,27 @@ public static class MetricsEndpoints
                 itemEntries = stats.ItemEntries,
                 itemsByKind = store.CountItemsByKind(),
                 images = new { files = imageFiles, bytes = imageBytes },
-                dbBytes
+                dbBytes,
+                // The dashboard overlays this against its own 3 s polling (DESIGN §18).
+                scrapeHistory = scrapes.Snapshot()
             };
             return Results.Json(payload, JsonOptions);
         });
 
-        app.MapGet("/metrics/prometheus", (UpstreamCache cache, CacheStore store, ImageStore images, CacheOptions options) =>
+        app.MapGet("/metrics/prometheus", (UpstreamCache cache, CacheStore store, ImageStore images, CacheOptions options, CacheWarmer warmer, UpstreamMetrics upstreamMetrics, ScrapeHistory scrapes) =>
         {
             CacheCounters counters = cache.GetCounters();
             CacheStats stats = store.GetStats();
             (int imageFiles, long imageBytes) = images.DiskUsage();
             long? dbBytes = options.DataSource == ":memory:" ? null : new FileInfo(options.DataSource).Length;
 
-            string body = RenderPrometheus(counters, stats, store.CountItemsByKind(), imageFiles, imageBytes, dbBytes);
+            // A Prometheus scrape lands here — snapshot the counters for the overlay.
+            scrapes.Record(new ScrapePoint(
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds(), counters.HitRate, counters.Hits, counters.Requests));
+
+            string body = RenderPrometheus(
+                counters, stats, store.CountItemsByKind(), imageFiles, imageBytes, dbBytes,
+                warmer.Status, upstreamMetrics.Snapshot());
             return Results.Text(body, "text/plain; version=0.0.4; charset=utf-8");
         });
     }
@@ -61,7 +71,8 @@ public static class MetricsEndpoints
     /// </summary>
     internal static string RenderPrometheus(
         CacheCounters counters, CacheStats stats, IReadOnlyDictionary<string, int> itemsByKind,
-        int imageFiles, long imageBytes, long? dbBytes)
+        int imageFiles, long imageBytes, long? dbBytes, WarmStatus? warm = null,
+        UpstreamMetricsSnapshot? upstream = null)
     {
         var sb = new StringBuilder(512);
 
@@ -81,11 +92,52 @@ public static class MetricsEndpoints
         if (dbBytes is not null)
             Gauge(sb, "metacache_db_bytes", "Size of the SQLite cache file on disk (absent for :memory:).", dbBytes.Value);
 
+        // Warm-run status (M3 /warm): the rules file alerts on errors and staleness.
+        Gauge(sb, "metacache_warm_running", "1 while a warm run is in flight.", warm?.IsRunning == true ? 1 : 0);
+        if (warm?.LastResult is { } last)
+        {
+            Gauge(sb, "metacache_warm_last_items", "Items warmed by the most recent run, by source.", last.ItemsWarmed, ("source", last.Source));
+            Gauge(sb, "metacache_warm_last_images", "Artwork images warmed by the most recent run, by source.", last.ImagesWarmed, ("source", last.Source));
+            Gauge(sb, "metacache_warm_last_missing", "Items skipped as missing by the most recent run, by source.", last.Missing, ("source", last.Source));
+            Gauge(sb, "metacache_warm_last_errors", "Items that failed to warm in the most recent run, by source.", last.Errors, ("source", last.Source));
+            Gauge(sb, "metacache_warm_last_success", "1 when the most recent run completed without errors.", last.Errors == 0 ? 1 : 0, ("source", last.Source));
+        }
+        if (warm?.CompletedAt is { } completed)
+            Gauge(sb, "metacache_warm_last_timestamp_seconds", "Unix time of the most recent warm attempt completion (success or failure).", completed.ToUnixTimeSeconds());
+
+        // Upstream request durations (real upstream requests only, cache hits excluded).
+        if (upstream is not null)
+        {
+            const string hist = "metacache_upstream_request_duration_seconds";
+            sb.Append("# HELP ").Append(hist).Append(" Time spent waiting on upstream providers (cache hits excluded).\n");
+            sb.Append("# TYPE ").Append(hist).Append(" histogram\n");
+            foreach (ProviderDurationHistogram h in upstream.Histograms)
+            {
+                for (int i = 0; i < h.BucketCounts.Length && i < UpstreamMetrics.DurationBuckets.Length; i++)
+                    sb.Append(hist).Append("_bucket{provider=\"").Append(Escape(h.Provider))
+                        .Append("\",le=\"").Append(UpstreamMetrics.DurationBuckets[i].ToString("0.###", CultureInfo.InvariantCulture))
+                        .Append("\"} ").Append(h.BucketCounts[i]).Append('\n');
+                sb.Append(hist).Append("_bucket{provider=\"").Append(Escape(h.Provider))
+                    .Append("\",le=\"+Inf\"} ").Append(h.Count).Append('\n');
+                sb.Append(hist).Append("_sum{provider=\"").Append(Escape(h.Provider))
+                    .Append("\"} ").Append(h.Sum.ToString("0.######", CultureInfo.InvariantCulture)).Append('\n');
+                sb.Append(hist).Append("_count{provider=\"").Append(Escape(h.Provider))
+                    .Append("\"} ").Append(h.Count).Append('\n');
+            }
+
+            if (upstream.RateLimitRemaining is { } remaining)
+                Gauge(sb, "metacache_tmdb_rate_limit_remaining", "TMDB API requests remaining in the current rate-limit window (X-RateLimit-Remaining), from the latest response.", remaining);
+            if (upstream.RateLimitLimit is { } limit)
+                Gauge(sb, "metacache_tmdb_rate_limit_limit", "TMDB API rate-limit window size (X-RateLimit-Limit), from the latest response.", limit);
+            foreach ((string provider, long count) in upstream.RateLimitedCounts)
+                Counter(sb, "metacache_upstream_rate_limited_total", "Upstream 429 (Too Many Requests) responses received, by provider.", count, ("provider", provider));
+        }
+
         return sb.ToString();
     }
 
-    private static void Counter(StringBuilder sb, string name, string help, long value) =>
-        Emit(sb, name, help, "counter", value, null);
+    private static void Counter(StringBuilder sb, string name, string help, long value, (string, string)? label = null) =>
+        Emit(sb, name, help, "counter", value, label);
 
     private static void Gauge(StringBuilder sb, string name, string help, double value, (string, string)? label = null) =>
         Emit(sb, name, help, "gauge", value, label);

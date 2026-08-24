@@ -734,6 +734,14 @@ in the endpoint — no external JS/CDN, so it works with the WAN down) that poll
 per-kind item bars, disk usage, and a 120-point hit-rate sparkline. Verified live
 in the Preview tab.
 
+The sparkline overlays two series: the browser's own 3 s polling (blue) and the
+last 120 `/metrics/prometheus` scrapes (amber), served from a server-side
+`ScrapeHistory` ring buffer that records a snapshot (unix time + counters) on
+every scrape and is exposed through `/metrics` as `scrapeHistory`. Keeping the
+history server-side means it survives page reloads and tracks the real scrape
+interval however Prometheus is configured; the overlay is simply empty until a
+Prometheus job actually scrapes.
+
 **Prometheus scrape endpoint.** `GET /metrics/prometheus` renders the same data in
 Prometheus text exposition format (`text/plain; version=0.0.4`): counters carry
 the `_total` suffix (`metacache_cache_requests_total`), the hit ratio and size
@@ -741,6 +749,34 @@ metrics are gauges, per-kind item counts use a `kind` label, and `metacache_db_b
 is omitted entirely for `:memory:` stores (empty series are dropped, so an empty
 store emits no `metacache_items_by_kind` instances). Point a Prometheus/Grafana
 scraper at it and alert on hit-rate or disk drift.
+
+The scrape surface also exposes upstream request durations and rate limiting:
+`metacache_upstream_request_duration_seconds` is a histogram (buckets 0.05 s to
+10 s) labeled by provider — "tmdb" for api.themoviedb.org, "images" for
+image.tmdb.org — recorded by `UpstreamCache`/`ImageCache` around real upstream
+requests only (cache hits are excluded, and a failed request still lands in the
+histogram). Providers are derived from the request host, so a future third
+upstream shows up automatically. The TMDB rate-limit surface has two parts:
+`metacache_tmdb_rate_limit_remaining`/`_limit` gauges from X-RateLimit-*
+response headers, and `metacache_upstream_rate_limited_total`, a per-provider
+counter incremented on every 429. The live API check found that TMDB's current
+API no longer sends X-RateLimit-* headers on success responses (verified with
+curl), so the gauges stay absent (unknown) against real TMDB — the 429 counter
+is the reliable throttle signal, and the rules file's `MetacacheRateLimited`
+alert keys off it.
+
+The scrape surface also exposes warm-run state so alerts can fire on warming
+failures: `metacache_warm_running`, per-source last-run gauges
+(`metacache_warm_last_{items,images,missing,errors,success}` with a `source`
+label), and `metacache_warm_last_timestamp_seconds` (completion time of the most
+recent attempt, success or failure — `WarmStatus.CompletedAt`, set in
+`RunAsync`). `monitoring/metacache-alerts.yml` ships six recommended rules
+(`promtool check rules`-clean): host down, hit rate below 80% over 10 min (via
+`rate()` on the `_total` counters, with a traffic floor so an idle cache stays
+silent — the lifetime `metacache_cache_hit_ratio` gauge resets on restart and is
+not alert-grade), image-cache disk > 10 GiB, upstream+DB disk > 5 GiB, warm runs
+completing with `errors > 0`, and no warm attempt for 36 h. Thresholds are
+comments-tunable per deployment.
 
 **Live run against real Radarr/Sonarr found three gaps (all fixed):** (1) a show
 whose content ratings had no US entry crashed `PeopleMapper.Select` —

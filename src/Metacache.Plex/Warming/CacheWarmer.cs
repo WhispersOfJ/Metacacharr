@@ -242,12 +242,16 @@ public sealed class CacheWarmer
         try
         {
             var started = DateTimeOffset.UtcNow;
-            _status = new WarmStatus(IsRunning: true, LastResult: null);
+            // While running, keep the previous result and completion time: the last
+            // finished attempt is still the last one until this run lands. Nulling it
+            // made the warm gauges vanish for the whole run (hours on big libraries),
+            // resetting the MetacacheWarmFailed alert timer.
+            _status = new WarmStatus(IsRunning: true, LastResult: _status.LastResult, CompletedAt: _status.CompletedAt);
             try
             {
                 WarmResult result = await body(ct).ConfigureAwait(false);
                 result = result with { ElapsedSeconds = (DateTimeOffset.UtcNow - started).TotalSeconds };
-                _status = new WarmStatus(IsRunning: false, result);
+                _status = new WarmStatus(IsRunning: false, result, CompletedAt: DateTimeOffset.UtcNow);
                 _logger.LogInformation(
                     "Warm {Source} done: {Items} items, {Images} images, {Missing} missing, {Errors} errors in {Elapsed:F1}s",
                     source, result.ItemsWarmed, result.ImagesWarmed, result.Missing, result.Errors, result.ElapsedSeconds);
@@ -256,7 +260,13 @@ public sealed class CacheWarmer
             catch (Exception ex)
             {
                 // A failed warm must not leave /warm/status stuck at isRunning: true.
-                _status = new WarmStatus(IsRunning: false, LastResult: null);
+                // CompletedAt moves forward, and a failed last result (Errors = 1) is
+                // published so /metrics/prometheus renders the warm-errors gauge and
+                // the MetacacheWarmFailed alert has a series to key off — a crashed
+                // run with LastResult: null was invisible to the rules file.
+                var failed = new WarmResult(source, ItemsWarmed: 0, ImagesWarmed: 0, Missing: 0, Errors: 1,
+                    Skipped: false, ElapsedSeconds: (DateTimeOffset.UtcNow - started).TotalSeconds);
+                _status = new WarmStatus(IsRunning: false, failed, CompletedAt: DateTimeOffset.UtcNow);
                 _logger.LogError(ex, "Warm {Source} failed", source);
                 throw;
             }

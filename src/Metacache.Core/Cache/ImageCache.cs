@@ -27,6 +27,7 @@ public sealed class ImageCache
     private readonly IUpstreamHttp _upstream;
     private readonly SingleFlight _flight;
     private readonly IClock _clock;
+    private readonly UpstreamMetrics _metrics;
     private readonly long _maxTotalBytes;
     private readonly ILogger<ImageCache> _logger;
 
@@ -36,6 +37,7 @@ public sealed class ImageCache
         IUpstreamHttp upstream,
         SingleFlight flight,
         IClock clock,
+        UpstreamMetrics metrics,
         ILogger<ImageCache> logger,
         long maxTotalBytes)
     {
@@ -44,6 +46,7 @@ public sealed class ImageCache
         _upstream = upstream;
         _flight = flight;
         _clock = clock;
+        _metrics = metrics;
         _maxTotalBytes = maxTotalBytes;
         _logger = logger;
     }
@@ -99,9 +102,19 @@ public sealed class ImageCache
         if (_store.Exists(hash))
             return Result(hash, url, ImageSource.Cache);
 
-        UpstreamResponse upstream = await _upstream
-            .SendAsync(new UpstreamRequest(new Uri(url)), CancellationToken.None)
-            .ConfigureAwait(false);
+        UpstreamResponse upstream;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            upstream = await _upstream
+                .SendAsync(new UpstreamRequest(new Uri(url)), CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            sw.Stop();
+            _metrics.Observe("images", sw.Elapsed.TotalSeconds);
+        }
 
         if (upstream.StatusCode is < 200 or >= 300)
             throw new UpstreamException(upstream.StatusCode, upstream.RetryAfter,

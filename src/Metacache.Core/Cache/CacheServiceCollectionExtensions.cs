@@ -17,6 +17,8 @@ public static class CacheServiceCollectionExtensions
         services.AddSingleton(options); // resolvable by /metrics for disk usage
         services.AddSingleton<IClock>(SystemClock.Instance);
         services.AddSingleton<SingleFlight>();
+        services.AddSingleton<UpstreamMetrics>();
+        services.AddSingleton<ScrapeHistory>();
         services.AddSingleton(_ => new CacheStore(options.DataSource));
         services.AddSingleton<IUpstreamHttp>(_ =>
             new HttpUpstreamClient(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }));
@@ -29,6 +31,7 @@ public static class CacheServiceCollectionExtensions
             sp.GetRequiredService<IUpstreamHttp>(),
             sp.GetRequiredService<SingleFlight>(),
             sp.GetRequiredService<IClock>(),
+            sp.GetRequiredService<UpstreamMetrics>(),
             sp.GetRequiredService<ILogger<ImageCache>>(),
             options.MaxImageTotalBytes));
         return services;

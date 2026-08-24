@@ -18,7 +18,8 @@ public sealed record UpstreamResponse(
     string? ContentType,
     string? ETag,
     DateTimeOffset? LastModified,
-    DateTimeOffset? RetryAfter);
+    DateTimeOffset? RetryAfter,
+    IReadOnlyDictionary<string, string>? Headers = null);
 
 /// <summary>
 /// Raised when upstream could not satisfy a request and no usable cache entry exists.

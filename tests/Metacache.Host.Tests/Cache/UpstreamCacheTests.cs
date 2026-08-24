@@ -13,13 +13,14 @@ public class UpstreamCacheTests
     {
         public FakeClock Clock { get; } = new(DateTimeOffset.Parse("2026-08-24T00:00:00+00:00"));
         public FakeUpstream Upstream { get; } = new();
+        public UpstreamMetrics Metrics { get; } = new();
         public CacheStore Store { get; }
         public UpstreamCache Cache { get; }
 
         public Fixture()
         {
             Store = new CacheStore(":memory:", Clock);
-            Cache = new UpstreamCache(Store, Upstream, new SingleFlight(), Clock, NullLogger<UpstreamCache>.Instance);
+            Cache = new UpstreamCache(Store, Upstream, new SingleFlight(), Clock, Metrics, NullLogger<UpstreamCache>.Instance);
         }
 
         public void Dispose() => Store.Dispose();
@@ -234,6 +235,56 @@ public class UpstreamCacheTests
 
         CachedUpstreamRow? stored = f.Store.GetUpstream(UpstreamCache.ComputeKey(Url));
         Assert.Equal(2, stored!.Hits);
+    }
+
+    [Fact]
+    public async Task Upstream_requests_are_recorded_in_the_duration_histogram()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => Ok("hello");
+
+        await f.Cache.GetOrFetchAsync(Url, Hour()); // miss → one upstream request
+        await f.Cache.GetOrFetchAsync(Url, Hour()); // hit → no upstream request
+
+        UpstreamMetricsSnapshot snapshot = f.Metrics.Snapshot();
+        ProviderDurationHistogram tmdb = Assert.Single(snapshot.Histograms);
+        Assert.Equal("tmdb", tmdb.Provider); // derived from api.themoviedb.org
+        Assert.Equal(1, tmdb.Count);          // only the miss is observed
+        Assert.True(tmdb.Sum >= 0);
+        Assert.Equal(tmdb.Count, tmdb.BucketCounts[^1]);
+    }
+
+    [Fact]
+    public async Task Rate_limit_headers_are_recorded_from_upstream_responses()
+    {
+        using var f = new Fixture();
+        f.Upstream.Handler = _ => new UpstreamResponse(
+            200, TestBytes.Of("hello"), "application/json", null, null, null,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["X-RateLimit-Remaining"] = "39",
+                ["X-RateLimit-Limit"] = "40"
+            });
+
+        await f.Cache.GetOrFetchAsync(Url, Hour());
+
+        UpstreamMetricsSnapshot snapshot = f.Metrics.Snapshot();
+        Assert.Equal(39, snapshot.RateLimitRemaining);
+        Assert.Equal(40, snapshot.RateLimitLimit);
+    }
+
+    [Fact]
+    public async Task Rate_limited_responses_are_counted_per_provider()
+    {
+        using var f = new Fixture();
+        f.SeedStale(body: "old-body");
+        f.Upstream.Handler = _ => Error(429, retryAfter: DateTimeOffset.UtcNow.AddSeconds(10));
+
+        // 429 with a stale entry → served stale; the throttle is still counted.
+        var result = await f.Cache.GetOrFetchAsync(Url, Hour());
+        Assert.Equal(CacheSource.Stale, result.Source);
+
+        Assert.Equal(1, f.Metrics.Snapshot().RateLimitedCounts["tmdb"]);
     }
 
     [Fact]

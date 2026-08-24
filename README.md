@@ -42,7 +42,9 @@ See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
   Radarr reports a new import (point their webhook settings at these URLs).
 - **Metrics dashboard (M3):** `GET /metrics` reports cache hit rate (live request
   counters), per-kind item counts, upstream-cache size, and disk usage (image files
-  + SQLite DB).
+  + SQLite DB); `GET /metrics/prometheus` renders the same data for scraping, and
+  `monitoring/metacache-alerts.yml` ships Prometheus alerting rules (host down,
+  low hit rate, disk usage, warm failures).
 
 The ARR proxy face (M4) is next — see DESIGN.md §12.
 
@@ -102,8 +104,8 @@ docker run -d --name metacache --network host metacache
 | `POST /webhook/radarr` / `/webhook/sonarr` | Event-driven warm: warm the one movie/show named by the ARR webhook payload (`eventType: Test` → `{ "result": "ok" }`) |
 | `GET /warm/status` | Live warmer state: `{ isRunning, lastResult }` |
 | `GET /metrics` | Cache hit rate, per-kind item counts, upstream size, disk usage (JSON) |
-| `GET /metrics/prometheus` | Same metrics in Prometheus text exposition format (`_total` counters, `kind` labels) for scraping |
-| `GET /dashboard` | Minimal live dashboard: polls `/metrics` and renders hit rate, per-kind bars, and disk usage with a hit-rate sparkline (self-contained HTML, no external assets) |
+| `GET /metrics/prometheus` | Same metrics in Prometheus text exposition format (`_total` counters, `kind`/`provider` labels, request-duration histogram, TMDB rate-limit gauges + 429 counter) for scraping |
+| `GET /dashboard` | Minimal live dashboard: polls `/metrics` and renders hit rate, per-kind bars, and disk usage with a hit-rate sparkline overlaying live polling vs the last 120 Prometheus scrapes (self-contained HTML, no external assets) |
 
 Localization via the `X-Plex-Language` header (or query param) is passed through to
 TMDB and used for the match language tiebreak; `X-Plex-Country` picks the content
