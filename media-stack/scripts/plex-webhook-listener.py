@@ -63,6 +63,7 @@ PLEX_URL = (env_get("PLEX_URL") or "").rstrip("/")
 PLEX_TOKEN = env_get("PLEX_TOKEN")
 DISCORD_WEBHOOK_URL = env_get("DISCORD_WEBHOOK_URL")
 LISTEN_PORT = int(env_get("PLEX_WEBHOOK_PORT") or "9880")
+METACACHE_URL = (env_get("METACACHE_URL") or "http://metacache:8765").rstrip("/")
 
 post_queue = queue.Queue()
 
@@ -167,6 +168,24 @@ def parse_multipart(content_type_header, body):
     return fields, thumb
 
 
+def warm_metacache(payload):
+    """Send the Plex webhook payload to Metacache for predictive warming."""
+    if not METACACHE_URL:
+        return
+    try:
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"{METACACHE_URL}/webhook/plex",
+            data=data,
+            headers={"Content-Type": "application/json", "User-Agent": "media-stack-plex-webhook/1.0"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"metacache warm: {resp.status}", file=sys.stderr)
+    except Exception as e:
+        print(f"metacache warm failed: {e}", file=sys.stderr)
+
+
 def handle_library_new(payload, attached_thumb):
     metadata = payload.get("Metadata", {})
     title = metadata.get("title", "Unknown")
@@ -199,6 +218,9 @@ def handle_library_new(payload, attached_thumb):
             print(f"poster fetch failed for {label!r}: {e}", file=sys.stderr)
 
     post_queue.put((embed, image, label))
+
+    # Trigger Metacache warm in background (non-blocking)
+    threading.Thread(target=warm_metacache, args=(payload,), daemon=True).start()
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
