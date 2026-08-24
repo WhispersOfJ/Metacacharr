@@ -17,9 +17,16 @@ public static class WarmEndpoints
     public static void MapWarmEndpoints(this WebApplication app)
     {
         app.MapGet("/warm/status", (CacheWarmer warmer) => Results.Json(warmer.Status, JsonOptions));
-        app.MapPost("/warm/movies", (CacheWarmer warmer, CancellationToken ct) => Run(warmer, () => warmer.WarmMoviesAsync(ct)));
-        app.MapPost("/warm/shows", (CacheWarmer warmer, CancellationToken ct) => Run(warmer, () => warmer.WarmShowsAsync(ct)));
-        app.MapPost("/warm/all", (CacheWarmer warmer, CancellationToken ct) => Run(warmer, () => warmer.WarmAllAsync(ct)));
+        // A library warm runs for hours — it must NOT be bound to the triggering HTTP
+        // request, or a client disconnect (timeout, browser close) cancels the whole job.
+        // Link to server shutdown instead: the run survives disconnects and /warm/status
+        // is the progress surface (the response returns the summary when it completes).
+        app.MapPost("/warm/movies", (CacheWarmer warmer, IHostApplicationLifetime lifetime) =>
+            Run(warmer, () => warmer.WarmMoviesAsync(lifetime.ApplicationStopping)));
+        app.MapPost("/warm/shows", (CacheWarmer warmer, IHostApplicationLifetime lifetime) =>
+            Run(warmer, () => warmer.WarmShowsAsync(lifetime.ApplicationStopping)));
+        app.MapPost("/warm/all", (CacheWarmer warmer, IHostApplicationLifetime lifetime) =>
+            Run(warmer, () => warmer.WarmAllAsync(lifetime.ApplicationStopping)));
         app.MapPost("/webhook/radarr", (CacheWarmer warmer, HttpContext context, CancellationToken ct) =>
             HandleArrWebhookAsync(warmer, context, ct, "movie", "tmdbId"));
         app.MapPost("/webhook/sonarr", (CacheWarmer warmer, HttpContext context, CancellationToken ct) =>

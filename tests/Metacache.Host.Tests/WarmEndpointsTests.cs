@@ -2,7 +2,9 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Metacache.Core.Cache;
+using Metacache.Core.Providers;
 using Metacache.Host.Tests.Cache;
+using Metacache.Plex.Warming;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -66,6 +68,11 @@ public class WarmEndpointsTests : IDisposable
         var store = _factory.Services.GetRequiredService<CacheStore>();
         Assert.Equal(2, store.CountItemsByKind()["movie"]);
         Assert.True(store.GetStats().UpstreamEntries >= 2);
+
+        // The ARR inventory call flowed through the gateway: Radarr latency is in the
+        // per-provider duration histogram.
+        var metrics = _factory.Services.GetRequiredService<UpstreamMetrics>();
+        Assert.Contains(metrics.Snapshot().Histograms, h => h.Provider == "radarr" && h.Count >= 1);
     }
 
     [Fact]
@@ -85,6 +92,42 @@ public class WarmEndpointsTests : IDisposable
         Assert.Equal(1, byKind["show"]);
         Assert.Equal(2, byKind["season"]);
         Assert.Equal(3, byKind["episode"]);
+    }
+
+    [Fact]
+    public async Task Warm_survives_a_client_disconnect_and_completes()
+    {
+        // Slow the upstream so the warm is still in flight when we abort the client.
+        // A warm bound to the request token would cancel here (TaskCanceledException);
+        // the endpoint must link to server shutdown instead.
+        Func<UpstreamRequest, UpstreamResponse> baseHandler = _upstream.Handler;
+        int calls = 0;
+        _upstream.Handler = request =>
+        {
+            if (Interlocked.Increment(ref calls) > 1)
+                Thread.Sleep(120);
+            return baseHandler(request);
+        };
+
+        var client = _factory.CreateClient();
+        _ = client.PostAsync("/warm/movies", null);
+
+        var warmer = _factory.Services.GetRequiredService<CacheWarmer>();
+        // Wait for the run to actually start (WarmStatus begins at IsRunning: false and
+        // the request may not have been dispatched yet), so the disconnect below is
+        // guaranteed to land mid-warm.
+        for (int i = 0; i < 200 && !warmer.Status.IsRunning; i++)
+            await Task.Delay(25);
+        Assert.True(warmer.Status.IsRunning, "the warm should start");
+        client.CancelPendingRequests(); // simulate a client disconnect mid-warm
+
+        for (int i = 0; i < 200 && warmer.Status.IsRunning; i++)
+            await Task.Delay(25);
+        Assert.False(warmer.Status.IsRunning, "the warm must finish despite the client disconnect");
+
+        WarmResult result = Assert.IsType<WarmResult>(warmer.Status.LastResult);
+        Assert.Equal(2, result.ItemsWarmed);
+        Assert.Equal(0, result.Errors);
     }
 
     [Fact]
