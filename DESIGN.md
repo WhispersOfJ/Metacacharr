@@ -475,3 +475,95 @@ Plex changes the API (it will — it's brand new), you change one folder.
 **Still open (no impact on M0–M2):** exact LAN IP/hostname the provider URL will use
 (affects image URL rewriting in §7.3), TVDB API key provisioning, and whether the ARR
 proxy face terminates TLS for ARR apps on this box or via Pi-hole LAN-wide.
+
+---
+
+## 15. Match scoring (M1)
+
+**Goal:** turn a Plex match request (§6.3) into a ranked list of TMDB candidates — one
+best match for auto-matching, or a full ranked list for manual "Fix Match". Implemented
+as a pure, unit-tested engine in `Metacache.Core/Matching/`; the M1 provider routes
+requests through it.
+
+### 15.1 Inputs
+
+| Hint | Source | Used for |
+|---|---|---|
+| `title` | match body | title similarity |
+| `year` | match body | year score |
+| `filename` | match body | filename year + token overlap |
+| `guid` (e.g. `imdb://tt0088763`) | match body | exact external-ID match (overrides all) |
+| `manual` | match body | ranked list vs. single best |
+| `includeAdult` | match body | adult filtering |
+| `X-Plex-Language` | header/query | small tiebreak bonus |
+
+### 15.2 Normalization (`TitleNormalizer`)
+
+Before any comparison: lowercase → replace smart quotes with ASCII → map non-
+alphanumerics to spaces → collapse whitespace → strip leading articles (`the`/`a`/`an`) →
+map trailing standalone roman numerals to digits (`rocky ii` → `rocky 2`, `episode iv` →
+`episode 4`). Similarity between two normalized titles = `max(token-Jaccard, bigram-Dice)`
+so word reordering and small spelling variants both score well.
+
+### 15.3 Candidate score (weighted sum, clamped to [0, 1] → ×100)
+
+| Component | Weight | Value |
+|---|---|---|
+| Title similarity | 0.45 | max over candidate `title` and `original_title` |
+| Year | 0.25 | exact = 1.0, ±1 = 0.4, else 0 (missing input = 0.5 neutral) |
+| Filename | 0.20 | 0.6·(file-year match) + 0.4·(filename-token Jaccard); no filename = 0.5 neutral |
+| Popularity | 0.10 | `1 − e^(−popularity/200)` — tiebreaker only |
+| Language | +0.02 | request language primary tag == candidate `original_language` |
+
+**Exact external GUID** (`guid` matches a candidate's `imdb://`/`tmdb://`/`tvdb://` id)
+overrides the weighted sum → score 1.0. Adult candidates are filtered out unless
+`includeAdult=1`. Ties break by popularity, then stable input order.
+
+### 15.4 Thresholds & response shaping (`MatchPolicy`)
+
+- Auto-match: return the best candidate only if `score ≥ 0.60`; below that, return an
+  empty container so Plex shows "Fix Match" instead of committing a wrong match.
+- Manual: return all candidates with `score ≥ 0.15`, sorted descending, capped at 20.
+
+### 15.5 M1 flow
+
+1. Map the Plex match body → `MatchHint`.
+2. `guid` present → TMDB `find` by external id (exact). Otherwise TMDB `search` by
+   title+year (both through `UpstreamCache`, single-flighted).
+3. **Enrich** the top ~8 search candidates with details (imdb id, posters, runtime,
+   original language) via `MetadataCache` — needed for exact-GUID scoring, artwork, and
+   the response `Guid[]`.
+4. `MatchScorer.Score(hint, candidates)` → ranked `ScoredMatch[]` (with per-component
+   breakdown for diagnostics).
+5. Map to `MediaContainer.Metadata[]` (M1 mapper) — best first, include `Guid[]`.
+
+### 15.6 Edge cases & limitations
+
+- Remakes/reboots with identical titles are separated by year; genuinely identical
+  title+year pairs fall back to popularity and remain a known coin-flip (manual fix
+  available).
+- Filename group names (e.g. `-RARBG`) aren't reliably distinguishable from title words;
+  only well-known release tags (codec/resolution/source) are stripped.
+- Weights and thresholds are isolated in `MatchPolicy` so they can be tuned from config
+  once the dashboard exists.
+
+### 15.7 TV matching (seasons/episodes)
+
+Seasons and episodes use their own weight set — the show title confirms identity while
+**structure (index/air-date) acts as a gate**: a definite index mismatch drops the
+structure component to 0, keeping wrong seasons/episodes below the auto threshold.
+
+| Component | Weight | Value |
+|---|---|---|
+| Show title | 0.40 | hint `parentTitle` (season) or `grandparentTitle` (episode) vs candidate parent (show) title |
+| Structure | 0.35 | season: season-index equality; episode: ½·(season) + ½·(episode) index equality, or exact air-date equality when no index hints exist |
+| Filename | 0.15 | filename tokens vs show title; `S01E05` / `Season N` parsed from the path supply structure when the body has no index |
+| Popularity | 0.10 | tiebreaker |
+
+Structural hints are taken from the request body first, then the filename; with no
+structural hint at all the component is neutral (0.5). Exact-GUID override, adult
+filtering, thresholds and manual/auto shaping are shared with movie matching.
+
+**Shipped:** the engine (`MatchHint` with `MatchKind`, `MatchCandidate` with TV fields,
+`MatchScorer` dispatch, `TitleNormalizer`, `FilenameParser` with SxxEyy/`Season N`,
+`MatchPolicy` TV weights) with unit tests — see `tests/…/Matching/`.
