@@ -292,22 +292,20 @@ Filenames keep no upstream host/API info → cache stays private.
 
 - **SQLite** (`metacache.db`): item store, cache index, stats. One file, zero ops,
   plenty for hundreds of thousands of items. WAL mode.
-  - Sketch:
+  - Sketch (implemented as `Metacache.Core/Cache/CacheStore.cs`; schema versioned via
+    `PRAGMA user_version`, timestamps persisted as ISO-8601 UTC):
     ```sql
-    items(id TEXT PRIMARY KEY,          -- normalized id: tmdb-show-15260
-          kind TEXT,                    -- movie|show|season|episode|collection|person
-          source TEXT, source_id TEXT,  -- tmdb|tvdb|imdb + id
-          lang TEXT,                    -- en-US / de-DE / …
-          json TEXT,                    -- normalized metadata payload
-          fetched_at TEXT, expires_at TEXT, etag TEXT)
+    items(id TEXT, kind TEXT, source TEXT, source_id TEXT, lang TEXT,
+          json TEXT, fetched_at TEXT, expires_at TEXT, etag TEXT,
+          PRIMARY KEY (id, lang))        -- one row per language variant
     upstream_cache(key TEXT PRIMARY KEY, -- sha256 of URL
           url TEXT, status INT, content_type TEXT, body BLOB,
-          fetched_at TEXT, expires_at TEXT, etag TEXT, hits INT)
+          fetched_at TEXT, expires_at TEXT, etag TEXT, last_modified TEXT, hits INT)
     urls(id TEXT PRIMARY KEY,            -- sha256 of original URL
           url TEXT, path TEXT,           -- path to image file
           size INT, fetched_at TEXT)
     ```
-  - Indexes on `(source, source_id)`, `(kind, lang)`.
+  - Indexes on `(source, source_id)`, `(kind, lang)`, `upstream_cache(expires_at)`.
 - **Image store:** `images/ab/cdef1234…` content-addressed files.
 - Sizing: a 2,000-movie library ≈ 4–8 GB of images + < 200 MB of JSON. Fine on any NAS.
 
@@ -422,7 +420,8 @@ Plex changes the API (it will — it's brand new), you change one folder.
 
 - **M0 — Skeleton:** .NET host, `/movie` + `/tv` provider definitions, health endpoint,
   Docker + Compose, config. *Definition of done:* Plex "Add Provider" accepts the URL
-  and shows the provider; requests log.
+  and shows the provider; requests log. **Shipped.** Cache core (SQLite store,
+  single-flight, ETag revalidation, stale-if-error) also shipped as M1 groundwork.
 - **M1 — Movies:** match + metadata for movie libraries; GUIDs; image rewriting through
   the local endpoint; SQLite cache with TTL + ETag revalidation; 404/400 semantics.
   *DoD:* create a movie library using the provider; "Fix Match" finds films; refresh

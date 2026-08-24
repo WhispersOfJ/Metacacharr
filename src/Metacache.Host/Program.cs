@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.HttpLogging;
+using Metacache.Core.Cache;
 using Metacache.Plex;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -9,6 +10,11 @@ var builder = WebApplication.CreateBuilder(args);
 var bindAddress = builder.Configuration["Metacache:BindAddress"] ?? "127.0.0.1";
 var port = builder.Configuration.GetValue<int?>("Metacache:Port") ?? 8765;
 builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
+
+// SQLite cache location (relative to the working directory unless overridden).
+var dataPath = Path.GetFullPath(builder.Configuration["Metacache:DataPath"] ?? "data/metacache.db");
+Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
+builder.Services.AddMetacacheCache(dataPath);
 
 builder.Services.AddHttpLogging(o =>
 {

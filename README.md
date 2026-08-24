@@ -7,12 +7,15 @@ HTTP metadata server.
 
 See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
 
-## Status: M0 — provider skeleton
+## Status: M0 + cache core
 
 - `GET /movie` and `GET /tv` serve the MediaProvider definitions Plex needs to register
   the providers ("Add Provider").
 - `GET /healthz` liveness check.
 - Rating-key and GUID utilities with tests.
+- **Cache core** (DESIGN.md §7): SQLite store (`upstream_cache` / `items` / `urls`),
+  keyed single-flight dedupe, ETag revalidation, TTL expiry, and stale-if-error
+  serving — fully unit-tested (29 tests).
 
 Match/metadata endpoints (M1), TV support (M2), cache warming (M3) and the ARR proxy
 face (M4) are next — see DESIGN.md §12.
@@ -34,6 +37,7 @@ dotnet run --project src/Metacache.Host
 |---|---|---|
 | `Metacache__BindAddress` | `127.0.0.1` | Set to `0.0.0.0` to expose on the LAN (required for Plex on another machine) |
 | `Metacache__Port` | `8765` | Provider URL port |
+| `Metacache__DataPath` | `data/metacache.db` | SQLite cache file (created on first run) |
 
 Env vars override `appsettings.json`, e.g.:
 
@@ -70,8 +74,9 @@ dotnet test
 ## Project layout
 
 ```
-src/Metacache.Core/   shared identity constants
-src/Metacache.Plex/   Plex provider API: wire models, catalog, rating keys, endpoints
-src/Metacache.Host/   ASP.NET Core host, config, logging
-tests/Metacache.Host.Tests/  integration + unit tests
+src/Metacache.Core/Cache/  SQLite store, single-flight, upstream gateway, item cache
+src/Metacache.Core/        shared identity constants
+src/Metacache.Plex/        Plex provider API: wire models, catalog, rating keys, endpoints
+src/Metacache.Host/        ASP.NET Core host, config, logging
+tests/Metacache.Host.Tests/  integration + unit tests (provider API + cache core)
 ```
