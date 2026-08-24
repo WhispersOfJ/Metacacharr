@@ -14,6 +14,8 @@ See [DESIGN.md](DESIGN.md) for the full architecture, API contract, and roadmap.
 - `GET /healthz` liveness check.
 - Admin surface: `GET /cache/stats` (cache sizes) and `POST /cache/purge` (expired-row
   cleanup), returning `{ "removed": n }`.
+- Image cache: artwork stored locally and served from `GET /img/{hash}` (content-
+  addressed, per-file + total caps with oldest-first eviction, self-healing refetch).
 - Rating-key and GUID utilities with tests.
 - **Cache core** (DESIGN.md §7): SQLite store (`upstream_cache` / `items` / `urls`),
   keyed single-flight dedupe, ETag revalidation, TTL expiry, and stale-if-error
@@ -40,6 +42,8 @@ dotnet run --project src/Metacache.Host
 | `Metacache__BindAddress` | `127.0.0.1` | Set to `0.0.0.0` to expose on the LAN (required for Plex on another machine) |
 | `Metacache__Port` | `8765` | Provider URL port |
 | `Metacache__DataPath` | `data/metacache.db` | SQLite cache file (created on first run) |
+| `Metacache__Matching__*` | (see `appsettings.json`) | Match-policy weights/thresholds, e.g. `Metacache__Matching__AutoMatchThreshold=0.75` |
+| `Metacache__Images__*` | `data/images`, 20 MB, 10 GB | Image cache dir, per-file cap (`MaxFileBytes`), total cap (`MaxTotalBytes`) |
 
 Env vars override `appsettings.json`, e.g.:
 

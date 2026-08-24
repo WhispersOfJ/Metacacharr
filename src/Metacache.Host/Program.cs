@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.HttpLogging;
 using Metacache.Core.Cache;
+using Metacache.Core.Matching;
 using Metacache.Host;
 using Metacache.Plex;
 
@@ -20,7 +21,16 @@ if (dataPath != ":memory:")
     dataPath = Path.GetFullPath(dataPath);
     Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 }
-builder.Services.AddMetacacheCache(dataPath);
+
+// Cache stack: SQLite store + content-addressed image store (config under Metacache:Images).
+var imagesSection = builder.Configuration.GetSection("Metacache:Images");
+var cacheOptions = new CacheOptions(
+    DataSource: dataPath,
+    ImageDirectory: Path.GetFullPath(imagesSection["Directory"] ?? "data/images"),
+    MaxImageBytes: imagesSection.GetValue<long?>("MaxFileBytes") ?? 20L * 1024 * 1024,
+    MaxImageTotalBytes: imagesSection.GetValue<long?>("MaxTotalBytes") ?? 10L * 1024 * 1024 * 1024);
+builder.Services.AddMetacacheCache(cacheOptions);
+builder.Services.AddMetacacheMatching(builder.Configuration);
 
 builder.Services.AddHttpLogging(o =>
 {
@@ -34,6 +44,7 @@ var app = builder.Build();
 app.UseHttpLogging();
 app.MapProviderEndpoints();
 app.MapCacheAdminEndpoints();
+app.MapImageEndpoints();
 app.MapGet("/healthz", () => Results.Text("ok", "text/plain"));
 
 app.Run();

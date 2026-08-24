@@ -283,10 +283,17 @@ image endpoint** (see §7.3) so Plex never fetches art from the internet.
 ### 7.3 Image endpoint
 
 Upstream image URLs (e.g. `https://image.tmdb.org/t/p/original/qk3eQ8…jpg`) are rewritten
-to `http://{host}:{port}/img/{sha256-of-original-url}`. On miss, Metacache streams the
-image from upstream into the image store (with a size cap, e.g. 20 MB) and serves it;
-on hit, it's a local file read. Plex's UI then loads every poster/backdrop from the LAN.
+to `http://{host}:{port}/img/{sha256-of-original-url}`. On miss, Metacache fetches the
+image from upstream and stores it (per-file cap, default 20 MB); on hit, it's a local
+file read (range-request aware). Plex's UI then loads every poster/backdrop from the LAN.
 Filenames keep no upstream host/API info → cache stays private.
+
+**Shipped (implementation notes):** `ImageStore` keeps extensionless content-addressed
+files at `{dir}/{first2}/{sha256}`, written atomically; content type is derived from the
+original URL, which is recorded in the `urls` table. `ImageCache` single-flights fetches
+and enforces a total-bytes cap (default 10 GB) by evicting oldest-first. Images are
+treated as immutable (no TTL) — bounded by the caps instead. `/img/{hash}` refetches
+when the URL is known but the file is missing, and 404s for unknown/invalid hashes.
 
 ### 7.4 Storage
 
@@ -544,8 +551,9 @@ overrides the weighted sum → score 1.0. Adult candidates are filtered out unle
   available).
 - Filename group names (e.g. `-RARBG`) aren't reliably distinguishable from title words;
   only well-known release tags (codec/resolution/source) are stripped.
-- Weights and thresholds are isolated in `MatchPolicy` so they can be tuned from config
-  once the dashboard exists.
+- Weights and thresholds live in `MatchPolicy`, which is now bound from the
+  `Metacache:Matching` configuration section (env overrides like
+  `Metacache__Matching__AutoMatchThreshold` work) — tunable at runtime without recompiling.
 
 ### 15.7 TV matching (seasons/episodes)
 

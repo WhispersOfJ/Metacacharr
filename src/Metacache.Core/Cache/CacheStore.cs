@@ -263,6 +263,54 @@ public sealed class CacheStore : IDisposable
         }
     }
 
+    public long SumUrlBytes()
+    {
+        lock (_gate)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT COALESCE(SUM(size), 0) FROM urls;";
+            return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+    }
+
+    /// <summary>Oldest url rows first (fetched_at, then id) — for total-cap eviction.</summary>
+    public IReadOnlyList<CachedUrl> GetOldestUrls(int limit)
+    {
+        lock (_gate)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT id, url, path, size, fetched_at FROM urls
+                ORDER BY fetched_at ASC, id ASC LIMIT @limit;
+                """;
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var rows = new List<CachedUrl>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                rows.Add(new CachedUrl(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetInt64(3),
+                    ParseTs(reader.GetString(4))));
+            }
+            return rows;
+        }
+    }
+
+    public void DeleteUrl(string hash)
+    {
+        lock (_gate)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM urls WHERE id = @id;";
+            cmd.Parameters.AddWithValue("@id", hash);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     // ---- maintenance / stats ----
 
     /// <summary>Deletes expired rows from upstream_cache and items (urls have no expiry).</summary>
