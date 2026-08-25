@@ -104,6 +104,8 @@ jobs:
 
       - name: Trivy — IaC/config scan (Dockerfile, compose)
         # Misconfiguration gate: non-root USER, secret baking, etc. (AVD rules).
+        # Scans only metacache/ and the root compose — other dirs (media-stack/
+        # worktrees) have stale Dockerfiles that trigger false-positive findings.
         id: trivy-config
         run: |
           docker run --rm \
@@ -115,7 +117,8 @@ jobs:
             --format sarif \
             --output /src/trivy-config.sarif \
             --exit-code 1 \
-            .
+            --skip-dirs media-stack \
+            metacache/
 
       - name: Trivy — pinned monitoring images scan (gate)
         id: trivy-images
