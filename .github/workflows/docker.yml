@@ -73,6 +73,18 @@ jobs:
           # token) restore from the cache but don't write; pushes/schedule do.
           cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
 
+      - name: Ensure GHCR package is public
+        # New packages default to private; flip to public so anonymous pulls
+        # (docker pull, Metacache compose) work without a login. Safe to re-run.
+        if: github.event_name != 'pull_request'
+        run: |
+          pkg=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          curl -sf -X PATCH \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/user/packages/container/${pkg##*/}" \
+            -d '{"visibility":"public"}' || echo "visibility set or already public"
+
       - name: Tag image for scanning (local ref, never pushed)
         run: |
           first_tag=$(echo "${{ steps.meta.outputs.tags }}" | cut -d, -f1)
