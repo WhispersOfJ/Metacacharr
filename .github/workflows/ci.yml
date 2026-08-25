@@ -30,15 +30,19 @@ jobs:
             nuget-${{ runner.os }}-
 
       - name: Restore
+        working-directory: metacache
         run: dotnet restore Metacache.slnx
 
       - name: Format (C# style gate)
+        working-directory: metacache
         run: dotnet format Metacache.slnx --verify-no-changes --no-restore
 
       - name: Build (warnings as errors)
+        working-directory: metacache
         run: dotnet build Metacache.slnx -c Release --no-restore -warnaserror
 
       - name: Test (with coverage)
+        working-directory: metacache
         run: dotnet test Metacache.slnx -c Release --no-build --collect:"XPlat Code Coverage" --results-directory TestResults
 
       - name: Upload coverage artifact
@@ -48,10 +52,11 @@ jobs:
         if: always() && github.actor != 'dependabot[bot]'
         with:
           name: coverage
-          path: TestResults
+          path: metacache/TestResults
           if-no-files-found: ignore
 
       - name: NuGet CVE audit (vulnerable packages)
         # Fails the build when any direct or transitive package has a known
         # vulnerable version (vulnerability data pulled from NuGet.org).
+        working-directory: metacache
         run: dotnet list Metacache.slnx package --vulnerable --include-transitive

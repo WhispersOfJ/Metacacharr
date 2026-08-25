@@ -24,9 +24,10 @@ services:
   # Metacache - Custom Metadata Provider + Cache
   # -------------------------------------------------------------------------
   metacache:
-    build:
-      context: ./metacache
-      dockerfile: Dockerfile
+    # Pulled from GHCR — the image is built and CVE-scanned by the root
+    # .github/workflows/docker.yml on every push to main. No local build
+    # toolchain or source checkout needed to run the stack.
+    image: ghcr.io/whispersofj/metacacharr:main
     container_name: metacache
     networks: [media-net]
     restart: unless-stopped

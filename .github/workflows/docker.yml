@@ -61,7 +61,7 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./metacache
           # Only GHCR-tagged images are pushed — a bare tag like metacache:ci
           # would resolve to Docker Hub and fail the push (401, no credentials).
           push: ${{ github.event_name != 'pull_request' }}
