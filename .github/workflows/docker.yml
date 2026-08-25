@@ -77,13 +77,19 @@ jobs:
         # New packages default to private; flip to public so anonymous pulls
         # (docker pull, Metacache compose) work without a login. Safe to re-run.
         if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          pkg=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          curl -sf -X PATCH \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/user/packages/container/${pkg##*/}" \
-            -d '{"visibility":"public"}' || echo "visibility set or already public"
+          pkg="${{ github.event.repository.name }}"
+          echo "Setting visibility for package: $pkg"
+          # gh CLI inherits GH_TOKEN with repo + packages scopes
+          gh api -X PATCH \
+            "/user/packages/container/$pkg" \
+            -f visibility=public 2>&1 || \
+          gh api -X PATCH \
+            "/orgs/${{ github.repository_owner }}/packages/container/$pkg" \
+            -f visibility=public 2>&1 || \
+          echo "::warning::Could not set package visibility — may need manual flip to public in GitHub Settings > Packages"
 
       - name: Tag image for scanning (local ref, never pushed)
         run: |
