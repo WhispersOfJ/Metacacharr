@@ -130,6 +130,10 @@ jobs:
         # fails, so the SARIF for each is still uploaded; the step then exits 1.
         run: |
           set -euo pipefail
+          if [ ! -f monitoring/docker-compose.yml ]; then
+            echo "monitoring/docker-compose.yml not found — skipping monitoring image scan"
+            exit 0
+          fi
           images=$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(.*\)$/\1/p' monitoring/docker-compose.yml | tr -d '"' | sed 's/[[:space:]]*$//')
           if [ -z "$images" ]; then
             echo "no pinned images found in monitoring/docker-compose.yml"
