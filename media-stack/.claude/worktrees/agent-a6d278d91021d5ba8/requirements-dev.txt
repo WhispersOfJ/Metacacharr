@@ -8,4 +8,4 @@ beautifulsoup4==4.15.0
 # starlette.testclient (used by fastapi.testclient.TestClient, imported by
 # control-panel's own test fixtures) prefers this over plain httpx now -
 # without it, every test run emits a StarletteDeprecationWarning.
-httpx2==2.9.1
+httpx2==2.12.0
